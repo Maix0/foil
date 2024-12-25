@@ -1,47 +1,9 @@
 use crate::types::*;
+use crate::*;
 
 #[no_mangle]
-pub unsafe extern "C" fn bwrap_log(
-    mut severity: libc::c_int,
-    mut format: *const libc::c_char,
-    mut args: ...
-) {
-    let mut args_0: ::core::ffi::VaListImpl;
-    args_0 = args.clone();
-    bwrap_logv(severity, format, args_0.as_va_list(), std::ptr::null_mut());
-}
-#[no_mangle]
-
-pub unsafe extern "C" fn die_with_error(mut format: *const libc::c_char, mut args: ...) -> ! {
-    let mut args_0: ::core::ffi::VaListImpl;
-    let mut errsv: libc::c_int = 0;
-    errsv = errno!();
-    args_0 = args.clone();
-    bwrap_logv(LOG_ERR, format, args_0.as_va_list(), strerror(errsv));
-    exit(1 as libc::c_int);
-}
-#[no_mangle]
-
-pub unsafe extern "C" fn die_with_mount_error(mut format: *const libc::c_char, mut args: ...) -> ! {
-    let mut args_0: ::core::ffi::VaListImpl;
-    let mut errsv: libc::c_int = 0;
-    errsv = errno!();
-    args_0 = args.clone();
-    bwrap_logv(LOG_ERR, format, args_0.as_va_list(), mount_strerror(errsv));
-    exit(1 as libc::c_int);
-}
-#[no_mangle]
-
-pub unsafe extern "C" fn die(mut format: *const libc::c_char, mut args: ...) -> ! {
-    let mut args_0: ::core::ffi::VaListImpl;
-    args_0 = args.clone();
-    bwrap_logv(LOG_ERR, format, args_0.as_va_list(), std::ptr::null_mut());
-    exit(1 as libc::c_int);
-}
-#[no_mangle]
-
 pub unsafe extern "C" fn die_unless_label_valid(mut label: *const libc::c_char) {
-    die(b"labeling not supported on this system\0" as *const u8 as *const libc::c_char);
+    die!(b"labeling not supported on this system\0" as *const u8 as *const libc::c_char);
 }
 #[no_mangle]
 
@@ -57,7 +19,7 @@ pub unsafe extern "C" fn die_oom() -> ! {
 pub unsafe extern "C" fn fork_intermediate_child() {
     let mut pid = fork();
     if pid == -(1 as libc::c_int) {
-        die_with_error(b"Can't fork for --pidns\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"Can't fork for --pidns\0" as *const u8 as *const libc::c_char);
     }
     if pid != 0 as libc::c_int {
         exit(0 as libc::c_int);
@@ -193,7 +155,7 @@ pub unsafe extern "C" fn has_prefix(
 
 pub unsafe extern "C" fn xclearenv() {
     if clearenv() != 0 as libc::c_int {
-        die_with_error(b"clearenv failed\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"clearenv failed\0" as *const u8 as *const libc::c_char);
     }
 }
 #[no_mangle]
@@ -268,22 +230,8 @@ pub unsafe extern "C" fn strconcat3(
     }
     return res;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn xasprintf(
-    mut format: *const libc::c_char,
-    mut args: ...
-) -> *mut libc::c_char {
-    let mut buffer = std::ptr::null_mut();
-    let mut args_0: ::core::ffi::VaListImpl;
-    args_0 = args.clone();
-    if vasprintf(&mut buffer, format, args_0.as_va_list()) == -1 {
-        die_oom();
-    }
-    return buffer;
-}
 #[no_mangle]
-
 pub unsafe extern "C" fn fdwalk(
     mut proc_fd: libc::c_int,
     mut cb: Option<unsafe extern "C" fn(*mut libc::c_void, libc::c_int) -> libc::c_int>,
@@ -776,7 +724,7 @@ pub unsafe extern "C" fn send_pid_on_socket(mut sockfd: libc::c_int) {
         }
     }) < 0
     {
-        die_with_error(b"Can't send pid\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"Can't send pid\0" as *const u8 as *const libc::c_char);
     }
 }
 #[no_mangle]
@@ -790,7 +738,7 @@ pub unsafe extern "C" fn create_pid_socketpair(mut sockets: *mut libc::c_int) {
         sockets,
     ) != 0 as libc::c_int
     {
-        die_with_error(
+        die_with_error!(
             b"Can't create intermediate pids socket\0" as *const u8 as *const libc::c_char,
         );
     }
@@ -802,7 +750,7 @@ pub unsafe extern "C" fn create_pid_socketpair(mut sockets: *mut libc::c_int) {
         ::core::mem::size_of::<libc::c_int>() as libc::c_ulong as socklen_t,
     ) < 0 as libc::c_int
     {
-        die_with_error(b"Can't set SO_PASSCRED\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"Can't set SO_PASSCRED\0" as *const u8 as *const libc::c_char);
     }
 }
 #[no_mangle]
@@ -848,10 +796,10 @@ pub unsafe extern "C" fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::
         }
     } < 0
     {
-        die_with_error(b"Can't read pid from socket\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"Can't read pid from socket\0" as *const u8 as *const libc::c_char);
     }
     if msg.msg_controllen <= 0 {
-        die(b"Unexpected short read from pid socket\0" as *const u8 as *const libc::c_char);
+        die!(b"Unexpected short read from pid socket\0" as *const u8 as *const libc::c_char);
     }
     cmsg = if msg.msg_controllen >= ::core::mem::size_of::<cmsghdr>() {
         msg.msg_control as *mut cmsghdr
@@ -885,7 +833,7 @@ pub unsafe extern "C" fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::
         }
         cmsg = __cmsg_nxthdr(&mut msg, cmsg);
     }
-    die(b"No pid returned on socket\0" as *const u8 as *const libc::c_char);
+    die!(b"No pid returned on socket\0" as *const u8 as *const libc::c_char);
 }
 #[no_mangle]
 
@@ -895,7 +843,7 @@ pub unsafe extern "C" fn readlink_malloc(mut pathname: *const libc::c_char) -> *
     let mut value = std::ptr::null_mut();
     loop {
         if size > SIZE_MAX.wrapping_div(2) {
-            die(b"Symbolic link target pathname too long\0" as *const u8 as *const libc::c_char);
+            die!(b"Symbolic link target pathname too long\0" as *const u8 as *const libc::c_char);
         }
         size = (size as libc::c_ulong).wrapping_mul(2 as libc::c_int as libc::c_ulong) as size_t
             as size_t;
@@ -1015,49 +963,8 @@ pub unsafe extern "C" fn strappend(mut dest: *mut StringBuilder, mut src: *const
     );
     (*dest).offset = new_offset;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn strappendf(
-    mut dest: *mut StringBuilder,
-    mut fmt: *const libc::c_char,
-    mut args: ...
-) {
-    let mut args_0: ::core::ffi::VaListImpl;
-    let mut len: libc::c_int = 0;
-    let mut new_offset: size_t = 0;
-    args_0 = args.clone();
-    len = vsnprintf(
-        ((*dest).str_0).offset((*dest).offset as isize),
-        ((*dest).size).wrapping_sub((*dest).offset) as _,
-        fmt,
-        args_0.as_va_list(),
-    );
-    if len < 0 as libc::c_int {
-        die_with_error(b"vsnprintf\0" as *const u8 as *const libc::c_char);
-    }
-    new_offset = xadd((*dest).offset, len as size_t);
-    if new_offset >= (*dest).size {
-        (*dest).size = xmul(
-            xadd(new_offset, 1 as libc::c_int as size_t),
-            2 as libc::c_int as size_t,
-        );
-        (*dest).str_0 =
-            xrealloc((*dest).str_0 as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
-        args_0 = args.clone();
-        len = vsnprintf(
-            ((*dest).str_0).offset((*dest).offset as isize),
-            ((*dest).size).wrapping_sub((*dest).offset) as _,
-            fmt,
-            args_0.as_va_list(),
-        );
-        if len < 0 as libc::c_int {
-            die_with_error(b"vsnprintf\0" as *const u8 as *const libc::c_char);
-        }
-    }
-    (*dest).offset = new_offset;
-}
 #[no_mangle]
-
 pub unsafe extern "C" fn strappend_escape_for_mount_options(
     mut dest: *mut StringBuilder,
     mut src: *const libc::c_char,

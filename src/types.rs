@@ -245,6 +245,7 @@ pub use libc::sockaddr_un;
 pub use libc::socket;
 pub use libc::socketpair;
 pub use libc::socklen_t;
+pub use libc::sscanf;
 pub use libc::ssize_t;
 pub use libc::stat;
 pub use libc::strcasecmp;
@@ -368,40 +369,24 @@ pub use libc::W_OK;
 pub use std::mem::MaybeUninit;
 
 extern "C" {
-    pub static mut stderr: *mut FILE;
-    pub fn fprintf(_: *mut FILE, _: *const libc::c_char, _: ...) -> libc::c_int;
-    pub fn vfprintf(_: *mut FILE, _: *const libc::c_char, _: ::core::ffi::VaList) -> libc::c_int;
-    pub fn vsnprintf(
-        _: *mut libc::c_char,
-        _: libc::c_ulong,
-        _: *const libc::c_char,
-        _: ::core::ffi::VaList,
-    ) -> libc::c_int;
-    pub fn vasprintf(
-        __ptr: *mut *mut libc::c_char,
-        __f: *const libc::c_char,
-        __arg: ::core::ffi::VaList,
-    ) -> libc::c_int;
     pub fn __cmsg_nxthdr(__mhdr: *mut msghdr, __cmsg: *mut cmsghdr) -> *mut cmsghdr;
-    pub fn sscanf(_: *const libc::c_char, _: *const libc::c_char, _: ...) -> libc::c_int;
+    pub fn __ctype_b_loc() -> *mut *const libc::c_ushort;
     pub fn cap_from_name(_: *const libc::c_char, _: *mut cap_value_t) -> libc::c_int;
     pub fn capget(header: cap_user_header_t, data: cap_user_data_t) -> libc::c_int;
     pub fn capset(header: cap_user_header_t, data: cap_user_data_t) -> libc::c_int;
-    pub fn __ctype_b_loc() -> *mut *const libc::c_ushort;
     pub fn get_current_dir_name() -> *mut libc::c_char;
-    pub static mut stdout: *mut FILE;
-    pub fn printf(_: *const libc::c_char, _: ...) -> libc::c_int;
-    pub fn loopback_setup();
-    pub fn die_with_error(format: *const libc::c_char, _: ...) -> !;
-    pub fn die(format: *const libc::c_char, _: ...) -> !;
-    pub fn xstrdup(str: *const libc::c_char) -> *mut libc::c_char;
-    pub fn xasprintf(format: *const libc::c_char, _: ...) -> *mut libc::c_char;
-    pub fn has_path_prefix(str: *const libc::c_char, prefix: *const libc::c_char) -> bool;
-    pub fn path_equal(path1: *const libc::c_char, path2: *const libc::c_char) -> bool;
-    pub fn load_file_at(dirfd: libc::c_int, path: *const libc::c_char) -> *mut libc::c_char;
     pub fn get_oldroot_path(path: *const libc::c_char) -> *mut libc::c_char;
-    pub fn readlink_malloc(pathname: *const libc::c_char) -> *mut libc::c_char;
+    pub fn has_path_prefix(str: *const libc::c_char, prefix: *const libc::c_char) -> bool;
+    pub fn load_file_at(dirfd: libc::c_int, path: *const libc::c_char) -> *mut libc::c_char;
+    pub fn loopback_setup();
     pub fn mount_strerror(errsv: libc::c_int) -> *const libc::c_char;
+    pub fn path_equal(path1: *const libc::c_char, path2: *const libc::c_char) -> bool;
+    pub fn readlink_malloc(pathname: *const libc::c_char) -> *mut libc::c_char;
+    pub fn strappendf(dest: *mut StringBuilder, fmt: *const libc::c_char, args: ...);
+    pub fn xasprintf(format: *const libc::c_char, args: ...) -> *mut libc::c_char;
+    pub fn xstrdup(str: *const libc::c_char) -> *mut libc::c_char;
+    pub static mut stderr: *mut FILE;
+    pub static mut stdout: *mut FILE;
 }
 
 pub type __socket_type = libc::c_uint;
@@ -431,31 +416,48 @@ pub unsafe extern "C" fn steal_pointer(mut pp: *mut libc::c_void) -> *mut libc::
 #[no_mangle]
 pub static mut bwrap_level_prefix: bool = true;
 
-pub unsafe extern "C" fn bwrap_logv(
-    mut severity: libc::c_int,
-    mut format: *const libc::c_char,
-    mut args: ::core::ffi::VaList,
-    mut detail: *const libc::c_char,
-) {
-    if bwrap_level_prefix {
-        fprintf(
-            stderr,
-            b"<%d>\0" as *const u8 as *const libc::c_char,
-            severity,
-        );
-    }
-    fprintf(stderr, b"bwrap: \0" as *const u8 as *const libc::c_char);
-    vfprintf(stderr, format, args.as_va_list());
-    if !detail.is_null() {
-        fprintf(
-            stderr,
-            b": %s\0" as *const u8 as *const libc::c_char,
-            detail,
-        );
-    }
-    fprintf(stderr, b"\n\0" as *const u8 as *const libc::c_char);
+#[macro_export]
+macro_rules! bwrap_logv {
+    ($($t:tt)*) => {};
+}
+#[macro_export]
+macro_rules! bwrap_log {
+    ($($t:tt)*) => {};
 }
 
+#[macro_export]
+macro_rules! die_with_error {
+    ($($e:expr),* $(,)?) => {
+        let v = ($($e, )*);
+        panic!("with_error: {:?}", std::ffi::CStr::from_ptr(v.0));
+    };
+}
+
+#[macro_export]
+macro_rules! die_with_bind_result {
+    ($($e:expr),* $(,)?) => {
+        let v = ($($e, )*);
+        panic!("bind result: {:?}", (v.0));
+    };
+}
+
+#[macro_export]
+macro_rules! die_with_mount_error {
+    ($($e:expr),* $(,)?) => {
+        let v = ($($e, )*);
+        panic!("with_error: {:?}", std::ffi::CStr::from_ptr(v.0));
+    };
+}
+
+pub use libc::fprintf;
+
+#[macro_export]
+macro_rules! die {
+    ($($e:expr),* $(,)?) => {
+        let v = ($($e, )*);
+        panic!("log: {:?}", std::ffi::CStr::from_ptr(v.0));
+    };
+}
 pub const NLMSG_HDRLEN: libc::c_ulong = (::core::mem::size_of::<nlmsghdr>() as libc::c_ulong)
     .wrapping_add(NLMSG_ALIGNTO as libc::c_ulong)
     .wrapping_sub(1)

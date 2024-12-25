@@ -1,6 +1,7 @@
-use crate::{src::utils::xcalloc, types::*};
+use crate::{types::*, utils::xcalloc};
 use ::libc;
 use libc::strchr;
+use crate::*;
 
 unsafe extern "C" fn skip_token(
     mut line: *mut libc::c_char,
@@ -233,7 +234,7 @@ unsafe extern "C" fn parse_mountinfo(
         b"self/mountinfo\0" as *const u8 as *const libc::c_char,
     );
     if mountinfo.is_null() {
-        die_with_error(b"Can't open /proc/self/mountinfo\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"Can't open /proc/self/mountinfo\0" as *const u8 as *const libc::c_char);
     }
     n_lines = count_lines(mountinfo);
     lines =
@@ -272,7 +273,7 @@ unsafe extern "C" fn parse_mountinfo(
             &mut consumed as *mut libc::c_int,
         );
         if rc != 4 as libc::c_int {
-            die(b"Can't parse mountinfo line\0" as *const u8 as *const libc::c_char);
+            die!(b"Can't parse mountinfo line\0" as *const u8 as *const libc::c_char);
         }
         rest = line.offset(consumed as isize);
         rest = skip_token(rest, true);
@@ -608,53 +609,4 @@ unsafe extern "C" fn bind_mount_result_to_string(
         *want_errno_p = want_errno;
     }
     return string;
-}
-#[no_mangle]
-
-pub unsafe extern "C" fn die_with_bind_result(
-    mut res: bind_mount_result,
-    mut saved_errno: libc::c_int,
-    mut failing_path: *const libc::c_char,
-    mut format: *const libc::c_char,
-    mut args: ...
-) -> ! {
-    let mut args_0: ::core::ffi::VaListImpl;
-    let mut want_errno = true;
-    let mut message = 0 as *mut libc::c_char;
-    if bwrap_level_prefix {
-        fprintf(
-            stderr,
-            b"<%d>\0" as *const u8 as *const libc::c_char,
-            LOG_ERR,
-        );
-    }
-    fprintf(stderr, b"bwrap: \0" as *const u8 as *const libc::c_char);
-    args_0 = args.clone();
-    vfprintf(stderr, format, args_0.as_va_list());
-    message = bind_mount_result_to_string(res, failing_path, &mut want_errno);
-    fprintf(
-        stderr,
-        b": %s\0" as *const u8 as *const libc::c_char,
-        message,
-    );
-    if want_errno {
-        match res as libc::c_uint {
-            1 | 6 | 7 => {
-                fprintf(
-                    stderr,
-                    b": %s\0" as *const u8 as *const libc::c_char,
-                    mount_strerror(saved_errno),
-                );
-            }
-            2 | 3 | 4 | 5 | 0 | _ => {
-                fprintf(
-                    stderr,
-                    b": %s\0" as *const u8 as *const libc::c_char,
-                    strerror(saved_errno),
-                );
-            }
-        }
-    }
-    fprintf(stderr, b"\n\0" as *const u8 as *const libc::c_char);
-    exit(1 as libc::c_int);
 }

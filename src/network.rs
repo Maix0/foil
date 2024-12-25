@@ -1,5 +1,6 @@
-use ::libc;
 use crate::types::*;
+use ::libc;
+use crate::*;
 
 use std::ptr::addr_of_mut;
 
@@ -168,7 +169,7 @@ pub unsafe extern "C" fn loopback_setup() {
     *addr_of_mut!((*src_addr.as_mut_ptr()).nl_pid) = getpid() as _;
     if_loopback = if_nametoindex(b"lo\0" as *const u8 as *const libc::c_char) as libc::c_int;
     if if_loopback <= 0 as libc::c_int {
-        die_with_error(b"loopback: Failed to look up lo\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"loopback: Failed to look up lo\0" as *const u8 as *const libc::c_char);
     }
     rtnl_fd = socket(
         libc::PF_NETLINK,
@@ -176,7 +177,7 @@ pub unsafe extern "C" fn loopback_setup() {
         libc::NETLINK_ROUTE,
     );
     if rtnl_fd < 0 as libc::c_int {
-        die_with_error(
+        die_with_error!(
             b"loopback: Failed to create NETLINK_ROUTE socket\0" as *const u8
                 as *const libc::c_char,
         );
@@ -187,7 +188,7 @@ pub unsafe extern "C" fn loopback_setup() {
         ::core::mem::size_of::<sockaddr_nl>() as libc::c_ulong as socklen_t,
     );
     if r < 0 as libc::c_int {
-        die_with_error(
+        die_with_error!(
             b"loopback: Failed to bind NETLINK_ROUTE socket\0" as *const u8 as *const libc::c_char,
         );
     }
@@ -221,7 +222,7 @@ pub unsafe extern "C" fn loopback_setup() {
             < ::core::mem::size_of::<[libc::c_char; 1024]>() as libc::c_ulong
     );
     if rtnl_do_request(rtnl_fd, header) != 0 as libc::c_int {
-        die_with_error(b"loopback: Failed RTM_NEWADDR\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"loopback: Failed RTM_NEWADDR\0" as *const u8 as *const libc::c_char);
     }
     header = rtnl_setup_request(
         buffer.as_mut_ptr(),
@@ -241,6 +242,6 @@ pub unsafe extern "C" fn loopback_setup() {
             < ::core::mem::size_of::<[libc::c_char; 1024]>() as libc::c_ulong
     );
     if rtnl_do_request(rtnl_fd, header) != 0 as libc::c_int {
-        die_with_error(b"loopback: Failed RTM_NEWLINK\0" as *const u8 as *const libc::c_char);
+        die_with_error!(b"loopback: Failed RTM_NEWLINK\0" as *const u8 as *const libc::c_char);
     }
 }

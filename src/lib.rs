@@ -5,20 +5,14 @@
 #![allow(non_upper_case_globals)]
 #![allow(unused_assignments)]
 #![allow(unused_mut)]
-#![feature(c_variadic)]
-#![feature(register_tool)]
-#![register_tool(c2rust)]
 
 extern crate libc;
-pub mod src {
-    pub mod bind_mount;
-    pub mod bubblewrap;
-    pub mod network;
-    pub mod utils;
-    pub mod types;
-} // mod src
-//
-pub use src::types;
+
+pub mod bind_mount;
+pub mod bubblewrap;
+pub mod network;
+pub mod types;
+pub mod utils;
 
 #[macro_use]
 pub mod _macros {
