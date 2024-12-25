@@ -1,5 +1,5 @@
 use ::libc;
-use libc::{fcntl, printf, sscanf, uintmax_t, AT_FDCWD, MNT_DETACH, MS_MGC_VAL, S_IFDIR};
+use libc::{fcntl, printf, uintmax_t, AT_FDCWD, MNT_DETACH, MS_MGC_VAL, S_IFDIR};
 
 use crate::*;
 use crate::{
@@ -658,7 +658,7 @@ unsafe extern "C" fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) 
                 let mut val: u64 = 0;
                 let mut res: libc::c_int = 0;
                 val = (initial_exit_status + 1 as libc::c_int) as u64;
-                res = ({
+                res = {
                     loop {
                         let __result = write(
                             event_fd,
@@ -669,7 +669,7 @@ unsafe extern "C" fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) 
                             break __result as _;
                         }
                     }
-                });
+                };
             }
         }
         if !(child == -(1 as libc::c_int) && errno!() != EINTR) {
