@@ -374,20 +374,17 @@ extern "C" {
     pub fn cap_from_name(_: *const libc::c_char, _: *mut cap_value_t) -> libc::c_int;
     pub fn capget(header: cap_user_header_t, data: cap_user_data_t) -> libc::c_int;
     pub fn capset(header: cap_user_header_t, data: cap_user_data_t) -> libc::c_int;
-    pub fn get_current_dir_name() -> *mut libc::c_char;
-    pub fn get_oldroot_path(path: *const libc::c_char) -> *mut libc::c_char;
-    pub fn has_path_prefix(str: *const libc::c_char, prefix: *const libc::c_char) -> bool;
-    pub fn load_file_at(dirfd: libc::c_int, path: *const libc::c_char) -> *mut libc::c_char;
-    pub fn loopback_setup();
-    pub fn mount_strerror(errsv: libc::c_int) -> *const libc::c_char;
-    pub fn path_equal(path1: *const libc::c_char, path2: *const libc::c_char) -> bool;
-    pub fn readlink_malloc(pathname: *const libc::c_char) -> *mut libc::c_char;
     pub fn strappendf(dest: *mut StringBuilder, fmt: *const libc::c_char, args: ...);
     pub fn xasprintf(format: *const libc::c_char, args: ...) -> *mut libc::c_char;
-    pub fn xstrdup(str: *const libc::c_char) -> *mut libc::c_char;
+    pub fn get_current_dir_name() -> *mut libc::c_char;
     pub static mut stderr: *mut FILE;
     pub static mut stdout: *mut FILE;
 }
+
+pub use crate::bind_mount::*;
+pub use crate::bubblewrap::*;
+pub use crate::network::*;
+pub use crate::utils::*;
 
 pub type __socket_type = libc::c_uint;
 pub type bind_option_t = libc::c_uint;

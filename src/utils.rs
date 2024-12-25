@@ -5,7 +5,8 @@ pub unsafe fn die_unless_label_valid(mut _label: *const libc::c_char) {
     die!(b"labeling not supported on this system\0" as *const u8 as *const libc::c_char);
 }
 
-pub unsafe fn die_oom() -> ! {
+#[no_mangle]
+pub unsafe extern "C" fn die_oom() -> ! {
     fputs(
         b"Out of memory\n\0" as *const u8 as *const libc::c_char,
         stderr,
@@ -31,6 +32,11 @@ pub unsafe fn xmalloc(mut size: size_t) -> *mut libc::c_void {
     return res;
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn die_with_error_proxy(ptr: *const libc::c_char) -> ! {
+    die_with_error!(ptr);
+}
+
 pub unsafe fn xcalloc(mut nmemb: size_t, mut size: size_t) -> *mut libc::c_void {
     let mut res = calloc(nmemb, size);
     if res.is_null() {
@@ -39,7 +45,11 @@ pub unsafe fn xcalloc(mut nmemb: size_t, mut size: size_t) -> *mut libc::c_void 
     return res;
 }
 
-pub unsafe fn xrealloc(mut ptr: *mut libc::c_void, mut size: size_t) -> *mut libc::c_void {
+#[no_mangle]
+pub unsafe extern "C" fn xrealloc(
+    mut ptr: *mut libc::c_void,
+    mut size: size_t,
+) -> *mut libc::c_void {
     let mut res = 0 as *mut libc::c_void;
     assert!(size != 0);
     res = realloc(ptr, size);
@@ -825,14 +835,16 @@ pub unsafe fn mount_strerror(mut errsv: libc::c_int) -> *const libc::c_char {
     };
 }
 
-unsafe fn xadd(mut a: size_t, mut b: size_t) -> size_t {
+#[no_mangle]
+unsafe extern "C" fn xadd(mut a: size_t, mut b: size_t) -> size_t {
     if a > SIZE_MAX.wrapping_sub(b) {
         die_oom();
     }
     return a.wrapping_add(b);
 }
 
-unsafe fn xmul(mut a: size_t, mut b: size_t) -> size_t {
+#[no_mangle]
+unsafe extern "C" fn xmul(mut a: size_t, mut b: size_t) -> size_t {
     if b != 0 && a > SIZE_MAX.wrapping_div(b) {
         die_oom();
     }

@@ -3513,7 +3513,7 @@ unsafe fn namespace_ids_write(mut fd: libc::c_int, mut in_json: bool) {
     }
 }
 
-unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> libc::c_int {
+pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> libc::c_int {
     let mut old_umask: mode_t = 0;
     let mut base_path = std::ptr::null_mut() as *const libc::c_char;
     let mut clone_flags: libc::c_int = 0;
@@ -4385,21 +4385,4 @@ unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> lib
         );
     }
     return 0 as libc::c_int;
-}
-pub fn main() {
-    let mut args: Vec<*mut libc::c_char> = Vec::new();
-    for arg in ::std::env::args() {
-        args.push(
-            (::std::ffi::CString::new(arg))
-                .expect("Failed to convert argument into CString.")
-                .into_raw(),
-        );
-    }
-    args.push(::core::ptr::null_mut());
-    unsafe {
-        ::std::process::exit(main_0(
-            (args.len() - 1) as libc::c_int,
-            args.as_mut_ptr() as *mut *mut libc::c_char,
-        ) as i32)
-    }
 }
