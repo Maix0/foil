@@ -1,10 +1,10 @@
 use crate::types::*;
-use ::libc;
 use crate::*;
+use ::libc;
 
 use std::ptr::addr_of_mut;
 
-unsafe extern "C" fn add_rta(
+unsafe fn add_rta(
     mut header: *mut nlmsghdr,
     mut type_0: libc::c_int,
     mut size: size_t,
@@ -36,10 +36,7 @@ unsafe extern "C" fn add_rta(
     ) as *mut libc::c_void;
 }
 
-unsafe extern "C" fn rtnl_send_request(
-    mut rtnl_fd: libc::c_int,
-    mut header: *mut nlmsghdr,
-) -> libc::c_int {
+unsafe fn rtnl_send_request(mut rtnl_fd: libc::c_int, mut header: *mut nlmsghdr) -> libc::c_int {
     let mut dst_addr: MaybeUninit<sockaddr_nl> = MaybeUninit::zeroed();
     *addr_of_mut!((*dst_addr.as_mut_ptr()).nl_family) = libc::AF_NETLINK as _;
     let mut sent: ssize_t = 0;
@@ -64,10 +61,7 @@ unsafe extern "C" fn rtnl_send_request(
     return 0 as libc::c_int;
 }
 
-unsafe extern "C" fn rtnl_read_reply(
-    mut rtnl_fd: libc::c_int,
-    mut seq_nr: libc::c_uint,
-) -> libc::c_int {
+unsafe fn rtnl_read_reply(mut rtnl_fd: libc::c_int, mut seq_nr: libc::c_uint) -> libc::c_int {
     let mut buffer: [libc::c_char; 1024] = [0; 1024];
     let mut received: ssize_t = 0;
     let mut rheader = 0 as *mut nlmsghdr;
@@ -119,10 +113,7 @@ unsafe extern "C" fn rtnl_read_reply(
     }
 }
 
-unsafe extern "C" fn rtnl_do_request(
-    mut rtnl_fd: libc::c_int,
-    mut header: *mut nlmsghdr,
-) -> libc::c_int {
+unsafe fn rtnl_do_request(mut rtnl_fd: libc::c_int, mut header: *mut nlmsghdr) -> libc::c_int {
     if rtnl_send_request(rtnl_fd, header) != 0 as libc::c_int {
         return -(1 as libc::c_int);
     }
@@ -132,7 +123,7 @@ unsafe extern "C" fn rtnl_do_request(
     return 0 as libc::c_int;
 }
 
-unsafe extern "C" fn rtnl_setup_request(
+unsafe fn rtnl_setup_request(
     mut buffer: *mut libc::c_char,
     mut type_0: libc::c_int,
     mut flags: libc::c_int,
@@ -152,9 +143,8 @@ unsafe extern "C" fn rtnl_setup_request(
     (*header).nlmsg_pid = getpid() as u32;
     return header;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn loopback_setup() {
+pub unsafe fn loopback_setup() {
     let mut r: libc::c_int = 0;
     let mut if_loopback: libc::c_int = 0;
     let mut rtnl_fd = -(1 as libc::c_int);

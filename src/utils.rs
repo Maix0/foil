@@ -1,22 +1,19 @@
 use crate::types::*;
 use crate::*;
 
-#[no_mangle]
-pub unsafe extern "C" fn die_unless_label_valid(mut label: *const libc::c_char) {
+pub unsafe fn die_unless_label_valid(mut _label: *const libc::c_char) {
     die!(b"labeling not supported on this system\0" as *const u8 as *const libc::c_char);
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn die_oom() -> ! {
+pub unsafe fn die_oom() -> ! {
     fputs(
         b"Out of memory\n\0" as *const u8 as *const libc::c_char,
         stderr,
     );
     exit(1 as libc::c_int);
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn fork_intermediate_child() {
+pub unsafe fn fork_intermediate_child() {
     let mut pid = fork();
     if pid == -(1 as libc::c_int) {
         die_with_error!(b"Can't fork for --pidns\0" as *const u8 as *const libc::c_char);
@@ -25,30 +22,24 @@ pub unsafe extern "C" fn fork_intermediate_child() {
         exit(0 as libc::c_int);
     }
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn xmalloc(mut size: size_t) -> *mut libc::c_void {
+pub unsafe fn xmalloc(mut size: size_t) -> *mut libc::c_void {
     let mut res = malloc(size);
     if res.is_null() {
         die_oom();
     }
     return res;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn xcalloc(mut nmemb: size_t, mut size: size_t) -> *mut libc::c_void {
+pub unsafe fn xcalloc(mut nmemb: size_t, mut size: size_t) -> *mut libc::c_void {
     let mut res = calloc(nmemb, size);
     if res.is_null() {
         die_oom();
     }
     return res;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn xrealloc(
-    mut ptr: *mut libc::c_void,
-    mut size: size_t,
-) -> *mut libc::c_void {
+pub unsafe fn xrealloc(mut ptr: *mut libc::c_void, mut size: size_t) -> *mut libc::c_void {
     let mut res = 0 as *mut libc::c_void;
     assert!(size != 0);
     res = realloc(ptr, size);
@@ -57,9 +48,8 @@ pub unsafe extern "C" fn xrealloc(
     }
     return res;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn xstrdup(mut str: *const libc::c_char) -> *mut libc::c_char {
+pub unsafe fn xstrdup(mut str: *const libc::c_char) -> *mut libc::c_char {
     let mut res = 0 as *mut libc::c_char;
     assert!(!str.is_null());
     res = strdup(str);
@@ -68,34 +58,29 @@ pub unsafe extern "C" fn xstrdup(mut str: *const libc::c_char) -> *mut libc::c_c
     }
     return res;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn strfreev(mut str_array: *mut *mut libc::c_char) {
+pub unsafe fn strfreev(mut str_array: *mut *mut libc::c_char) {
     if !str_array.is_null() {
         let mut i: libc::c_int = 0;
         i = 0 as libc::c_int;
         while !(*str_array.offset(i as isize)).is_null() {
             free(*str_array.offset(i as isize) as *mut libc::c_void);
             i += 1;
-            i;
         }
         free(str_array as *mut libc::c_void);
     }
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn has_path_prefix(
+pub unsafe fn has_path_prefix(
     mut str: *const libc::c_char,
     mut prefix: *const libc::c_char,
 ) -> bool {
     loop {
         while *str as libc::c_int == '/' as i32 {
             str = str.offset(1);
-            str;
         }
         while *prefix as libc::c_int == '/' as i32 {
             prefix = prefix.offset(1);
-            prefix;
         }
         if *prefix as libc::c_int == 0 as libc::c_int {
             return (true as i32) != 0;
@@ -105,21 +90,15 @@ pub unsafe extern "C" fn has_path_prefix(
                 return (false as i32) != 0;
             }
             str = str.offset(1);
-            str;
             prefix = prefix.offset(1);
-            prefix;
         }
         if *str as libc::c_int != '/' as i32 && *str as libc::c_int != 0 as libc::c_int {
             return (false as i32) != 0;
         }
     }
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn path_equal(
-    mut path1: *const libc::c_char,
-    mut path2: *const libc::c_char,
-) -> bool {
+pub unsafe fn path_equal(mut path1: *const libc::c_char, mut path2: *const libc::c_char) -> bool {
     loop {
         while *path1 as libc::c_int == '/' as i32 {
             path1 = path1.offset(1);
@@ -143,24 +122,18 @@ pub unsafe extern "C" fn path_equal(
         }
     }
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn has_prefix(
-    mut str: *const libc::c_char,
-    mut prefix: *const libc::c_char,
-) -> bool {
+pub unsafe fn has_prefix(mut str: *const libc::c_char, mut prefix: *const libc::c_char) -> bool {
     return strncmp(str, prefix, strlen(prefix)) == 0 as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn xclearenv() {
+pub unsafe fn xclearenv() {
     if clearenv() != 0 as libc::c_int {
         die_with_error!(b"clearenv failed\0" as *const u8 as *const libc::c_char);
     }
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn xsetenv(
+pub unsafe fn xsetenv(
     mut name: *const libc::c_char,
     mut value: *const libc::c_char,
     mut overwrite: libc::c_int,
@@ -169,15 +142,14 @@ pub unsafe extern "C" fn xsetenv(
         panic!("setenv failed");
     }
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn xunsetenv(mut name: *const libc::c_char) {
+pub unsafe fn xunsetenv(mut name: *const libc::c_char) {
     if unsetenv(name) != 0 {
         panic!("unsetenv failed");
     }
 }
-#[no_mangle]
-pub unsafe extern "C" fn strconcat(
+
+pub unsafe fn strconcat(
     mut s1: *const libc::c_char,
     mut s2: *const libc::c_char,
 ) -> *mut libc::c_char {
@@ -200,8 +172,7 @@ pub unsafe extern "C" fn strconcat(
     return res;
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn strconcat3(
+pub unsafe fn strconcat3(
     mut s1: *const libc::c_char,
     mut s2: *const libc::c_char,
     mut s3: *const libc::c_char,
@@ -231,10 +202,9 @@ pub unsafe extern "C" fn strconcat3(
     return res;
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn fdwalk(
+pub unsafe fn fdwalk(
     mut proc_fd: libc::c_int,
-    mut cb: Option<unsafe extern "C" fn(*mut libc::c_void, libc::c_int) -> libc::c_int>,
+    mut cb: Option<unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int>,
     mut data: *mut libc::c_void,
 ) -> libc::c_int {
     let mut open_max: libc::c_int = 0;
@@ -303,13 +273,11 @@ pub unsafe extern "C" fn fdwalk(
             break;
         }
         fd += 1;
-        fd;
     }
     return res;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn write_to_fd(
+pub unsafe fn write_to_fd(
     mut fd: libc::c_int,
     mut content: *const libc::c_char,
     mut len: ssize_t,
@@ -331,9 +299,8 @@ pub unsafe extern "C" fn write_to_fd(
     }
     return 0 as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn write_file_at(
+pub unsafe fn write_file_at(
     mut dfd: libc::c_int,
     mut path: *const libc::c_char,
     mut content: *const libc::c_char,
@@ -341,25 +308,21 @@ pub unsafe extern "C" fn write_file_at(
     let mut fd: libc::c_int = 0;
     let mut res: bool = false;
     let mut errsv: libc::c_int = 0;
-    fd = ({
-        let mut __result: libc::c_long = 0;
-        loop {
-            __result = openat(
-                dfd,
-                path,
-                0o2 as libc::c_int | 0o2000000 as libc::c_int,
-                0 as libc::c_int,
-            ) as libc::c_long;
-            if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
-                break;
-            }
+    fd = loop {
+        let __result = openat(
+            dfd,
+            path,
+            0o2 as libc::c_int | 0o2000000 as libc::c_int,
+            0 as libc::c_int,
+        ) as libc::c_long;
+        if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
+            break __result;
         }
-        __result
-    }) as libc::c_int;
-    if fd == -(1 as libc::c_int) {
-        return -(1 as libc::c_int);
+    } as libc::c_int;
+    if fd == -(1) {
+        return -(1);
     }
-    res = 0 as libc::c_int != 0;
+    res = 0 != 0;
     if !content.is_null() {
         res = write_to_fd(fd, content, strlen(content) as ssize_t) != 0;
     }
@@ -368,9 +331,8 @@ pub unsafe extern "C" fn write_file_at(
     errno!() = errsv;
     return res as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn create_file(
+pub unsafe fn create_file(
     mut path: *const libc::c_char,
     mut mode: mode_t,
     mut content: *const libc::c_char,
@@ -378,16 +340,12 @@ pub unsafe extern "C" fn create_file(
     let mut fd: libc::c_int = 0;
     let mut res: libc::c_int = 0;
     let mut errsv: libc::c_int = 0;
-    fd = ({
-        let mut __result: libc::c_long = 0;
-        loop {
-            __result = creat(path, mode) as libc::c_long;
-            if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
-                break;
-            }
+    fd = loop {
+        let __result = creat(path, mode) as libc::c_long;
+        if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
+            break __result;
         }
-        __result
-    }) as libc::c_int;
+    } as libc::c_int;
     if fd == -(1 as libc::c_int) {
         return -(1 as libc::c_int);
     }
@@ -400,12 +358,8 @@ pub unsafe extern "C" fn create_file(
     errno!() = errsv;
     return res;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn ensure_file(
-    mut path: *const libc::c_char,
-    mut mode: mode_t,
-) -> libc::c_int {
+pub unsafe fn ensure_file(mut path: *const libc::c_char, mut mode: mode_t) -> libc::c_int {
     let mut buf: MaybeUninit<libc::stat> = MaybeUninit::uninit();
     if stat(path, buf.as_mut_ptr()) == 0 && {
         let buf = buf.assume_init();
@@ -421,9 +375,8 @@ pub unsafe extern "C" fn ensure_file(
 }
 
 pub const BUFSIZE: libc::c_int = 8192 as libc::c_int;
-#[no_mangle]
 
-pub unsafe extern "C" fn copy_file_data(mut sfd: libc::c_int, mut dfd: libc::c_int) -> libc::c_int {
+pub unsafe fn copy_file_data(mut sfd: libc::c_int, mut dfd: libc::c_int) -> libc::c_int {
     let mut buffer: [libc::c_char; 8192] = [0; 8192];
     let mut bytes_read: ssize_t = 0;
     loop {
@@ -448,9 +401,8 @@ pub unsafe extern "C" fn copy_file_data(mut sfd: libc::c_int, mut dfd: libc::c_i
     }
     return 0 as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn copy_file(
+pub unsafe fn copy_file(
     mut src_path: *const libc::c_char,
     mut dst_path: *const libc::c_char,
     mut mode: mode_t,
@@ -491,12 +443,8 @@ pub unsafe extern "C" fn copy_file(
     errno!() = errsv;
     return res;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn load_file_data(
-    mut fd: libc::c_int,
-    mut size: *mut size_t,
-) -> *mut libc::c_char {
+pub unsafe fn load_file_data(mut fd: libc::c_int, mut size: *mut size_t) -> *mut libc::c_char {
     let mut data = std::ptr::null_mut();
     let mut data_read: ssize_t = 0;
     let mut data_len: ssize_t = 0;
@@ -541,26 +489,21 @@ pub unsafe extern "C" fn load_file_data(
         steal_pointer(&mut data as *mut *mut libc::c_char as *mut libc::c_void)
     }) as *mut libc::c_char;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn load_file_at(
+pub unsafe fn load_file_at(
     mut dfd: libc::c_int,
     mut path: *const libc::c_char,
 ) -> *mut libc::c_char {
     let mut fd: libc::c_int = 0;
     let mut data = 0 as *mut libc::c_char;
     let mut errsv: libc::c_int = 0;
-    fd = ({
-        let mut __result: libc::c_long = 0;
-        loop {
-            __result =
-                openat(dfd, path, 0o2000000 as libc::c_int | 0 as libc::c_int) as libc::c_long;
-            if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
-                break;
-            }
+    fd = loop {
+        let __result =
+            openat(dfd, path, 0o2000000 as libc::c_int | 0 as libc::c_int) as libc::c_long;
+        if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
+            break __result;
         }
-        __result
-    }) as libc::c_int;
+    } as libc::c_int;
     if fd == -(1 as libc::c_int) {
         return std::ptr::null_mut();
     }
@@ -570,9 +513,8 @@ pub unsafe extern "C" fn load_file_at(
     errno!() = errsv;
     return data;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn get_file_mode(mut pathname: *const libc::c_char) -> libc::c_int {
+pub unsafe fn get_file_mode(mut pathname: *const libc::c_char) -> libc::c_int {
     let mut buf: std::mem::MaybeUninit<libc::stat> = MaybeUninit::uninit();
     if stat(pathname, buf.as_mut_ptr()) != 0 as libc::c_int {
         return -(1 as libc::c_int);
@@ -580,12 +522,8 @@ pub unsafe extern "C" fn get_file_mode(mut pathname: *const libc::c_char) -> lib
     let buf = buf.assume_init();
     return (buf.st_mode & S_IFMT as libc::c_uint) as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn ensure_dir(
-    mut path: *const libc::c_char,
-    mut mode: mode_t,
-) -> libc::c_int {
+pub unsafe fn ensure_dir(mut path: *const libc::c_char, mut mode: mode_t) -> libc::c_int {
     let mut buf: std::mem::MaybeUninit<libc::stat> = MaybeUninit::uninit();
     if stat(path, buf.as_mut_ptr()) == 0 {
         let buf = buf.assume_init();
@@ -600,9 +538,8 @@ pub unsafe extern "C" fn ensure_dir(
     }
     return 0;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn mkdir_with_parents(
+pub unsafe fn mkdir_with_parents(
     mut pathname: *const libc::c_char,
     mut mode: mode_t,
     mut create_last: bool,
@@ -617,12 +554,10 @@ pub unsafe extern "C" fn mkdir_with_parents(
     p = fn_0;
     while *p as libc::c_int == '/' as i32 {
         p = p.offset(1);
-        p;
     }
     loop {
         while *p as libc::c_int != 0 && *p as libc::c_int != '/' as i32 {
             p = p.offset(1);
-            p;
         }
         if *p == 0 {
             p = std::ptr::null_mut();
@@ -641,7 +576,6 @@ pub unsafe extern "C" fn mkdir_with_parents(
             *fresh0 = '/' as i32 as libc::c_char;
             while *p as libc::c_int != 0 && *p as libc::c_int == '/' as i32 {
                 p = p.offset(1);
-                p;
             }
         }
         if p.is_null() {
@@ -650,29 +584,15 @@ pub unsafe extern "C" fn mkdir_with_parents(
     }
     return 0 as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn send_pid_on_socket(mut sockfd: libc::c_int) {
+pub unsafe fn send_pid_on_socket(mut sockfd: libc::c_int) {
     let mut buf: [libc::c_char; 1] = [0 as libc::c_int as libc::c_char];
-    let mut msg = {
-        let mut init = msghdr {
-            msg_name: 0 as *mut libc::c_void,
-            msg_namelen: 0,
-            msg_iov: 0 as *mut iovec,
-            msg_iovlen: 0,
-            msg_control: 0 as *mut libc::c_void,
-            msg_controllen: 0,
-            msg_flags: 0,
-        };
-        init
+    let mut msg: msghdr = std::mem::zeroed();
+    let mut iov = iovec {
+        iov_base: buf.as_mut_ptr() as *mut libc::c_void,
+        iov_len: ::core::mem::size_of::<[libc::c_char; 1]>(),
     };
-    let mut iov = {
-        let mut init = iovec {
-            iov_base: buf.as_mut_ptr() as *mut libc::c_void,
-            iov_len: ::core::mem::size_of::<[libc::c_char; 1]>(),
-        };
-        init
-    };
+
     let control_len_snd = ((::core::mem::size_of::<ucred>() as libc::c_ulong)
         .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
         .wrapping_sub(1 as libc::c_int as libc::c_ulong)
@@ -687,12 +607,8 @@ pub unsafe extern "C" fn send_pid_on_socket(mut sockfd: libc::c_int) {
     ) as ssize_t;
     let vla = control_len_snd as usize;
     let mut control_buf_snd: Vec<libc::c_char> = ::std::vec::from_elem(0, vla);
-    let mut cmsg = 0 as *mut cmsghdr;
-    let mut cred = ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
+    let mut cmsg = std::ptr::null_mut() as *mut cmsghdr;
+    let mut cred: ucred = std::mem::zeroed();
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1 as libc::c_int as size_t;
     msg.msg_control = control_buf_snd.as_mut_ptr() as *mut libc::c_void;
@@ -717,19 +633,18 @@ pub unsafe extern "C" fn send_pid_on_socket(mut sockfd: libc::c_int) {
         &mut cred as *mut ucred as *const libc::c_void,
         ::core::mem::size_of::<ucred>(),
     );
-    if (loop {
+    if loop {
         let __result = sendmsg(sockfd, &mut msg, 0);
         if !(__result == -(1) && errno!() == EINTR) {
             break __result;
         }
-    }) < 0
+    } < 0
     {
         die_with_error!(b"Can't send pid\0" as *const u8 as *const libc::c_char);
     }
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn create_pid_socketpair(mut sockets: *mut libc::c_int) {
+pub unsafe fn create_pid_socketpair(mut sockets: *mut libc::c_int) {
     let mut enable = 1 as libc::c_int;
     if socketpair(
         libc::AF_UNIX,
@@ -753,19 +668,10 @@ pub unsafe extern "C" fn create_pid_socketpair(mut sockets: *mut libc::c_int) {
         die_with_error!(b"Can't set SO_PASSCRED\0" as *const u8 as *const libc::c_char);
     }
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::c_int {
+pub unsafe fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::c_int {
     let mut recv_buf: [libc::c_char; 1] = [0 as libc::c_int as libc::c_char];
-    let mut msg = msghdr {
-        msg_name: 0 as *mut libc::c_void,
-        msg_namelen: 0,
-        msg_iov: 0 as *mut iovec,
-        msg_iovlen: 0,
-        msg_control: 0 as *mut libc::c_void,
-        msg_controllen: 0,
-        msg_flags: 0,
-    };
+    let mut msg: msghdr = std::mem::zeroed();
     let mut iov = iovec {
         iov_base: recv_buf.as_mut_ptr() as *mut libc::c_void,
         iov_len: ::core::mem::size_of::<[libc::c_char; 1]>(),
@@ -835,9 +741,8 @@ pub unsafe extern "C" fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::
     }
     die!(b"No pid returned on socket\0" as *const u8 as *const libc::c_char);
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn readlink_malloc(mut pathname: *const libc::c_char) -> *mut libc::c_char {
+pub unsafe fn readlink_malloc(mut pathname: *const libc::c_char) -> *mut libc::c_char {
     let mut size = 50 as size_t;
     let mut n: ssize_t = 0;
     let mut value = std::ptr::null_mut();
@@ -863,64 +768,54 @@ pub unsafe extern "C" fn readlink_malloc(mut pathname: *const libc::c_char) -> *
         steal_pointer(&mut value as *mut *mut libc::c_char as *mut libc::c_void)
     }) as *mut libc::c_char;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn get_oldroot_path(mut path: *const libc::c_char) -> *mut libc::c_char {
+pub unsafe fn get_oldroot_path(mut path: *const libc::c_char) -> *mut libc::c_char {
     while *path as libc::c_int == '/' as i32 {
         path = path.offset(1);
-        path;
     }
     return strconcat(b"/oldroot/\0" as *const u8 as *const libc::c_char, path);
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn get_newroot_path(mut path: *const libc::c_char) -> *mut libc::c_char {
+pub unsafe fn get_newroot_path(mut path: *const libc::c_char) -> *mut libc::c_char {
     while *path as libc::c_int == '/' as i32 {
         path = path.offset(1);
-        path;
     }
     return strconcat(b"/newroot/\0" as *const u8 as *const libc::c_char, path);
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn raw_clone(
+pub unsafe fn raw_clone(
     mut flags: libc::c_ulong,
     mut child_stack: *mut libc::c_void,
 ) -> libc::c_int {
     return syscall(__NR_clone as libc::c_long, flags, child_stack) as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn pivot_root(
+pub unsafe fn pivot_root(
     mut new_root: *const libc::c_char,
     mut put_old: *const libc::c_char,
 ) -> libc::c_int {
     return syscall(__NR_pivot_root as libc::c_long, new_root, put_old) as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn label_mount(
+pub unsafe fn label_mount(
     mut opt: *const libc::c_char,
-    mut mount_label: *const libc::c_char,
+    mut _mount_label: *const libc::c_char,
 ) -> *mut libc::c_char {
     if !opt.is_null() {
         return xstrdup(opt);
     }
     return std::ptr::null_mut();
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn label_create_file(mut file_label: *const libc::c_char) -> libc::c_int {
+pub unsafe fn label_create_file(mut _file_label: *const libc::c_char) -> libc::c_int {
     return 0 as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn label_exec(mut exec_label: *const libc::c_char) -> libc::c_int {
+pub unsafe fn label_exec(mut _exec_label: *const libc::c_char) -> libc::c_int {
     return 0 as libc::c_int;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn mount_strerror(mut errsv: libc::c_int) -> *const libc::c_char {
+pub unsafe fn mount_strerror(mut errsv: libc::c_int) -> *const libc::c_char {
     match errsv {
         ENOSPC => {
             return b"Limit exceeded (ENOSPC). (Hint: Check that /proc/sys/fs/mount-max is sufficient, typically 100000)\0"
@@ -930,22 +825,21 @@ pub unsafe extern "C" fn mount_strerror(mut errsv: libc::c_int) -> *const libc::
     };
 }
 
-unsafe extern "C" fn xadd(mut a: size_t, mut b: size_t) -> size_t {
+unsafe fn xadd(mut a: size_t, mut b: size_t) -> size_t {
     if a > SIZE_MAX.wrapping_sub(b) {
         die_oom();
     }
     return a.wrapping_add(b);
 }
 
-unsafe extern "C" fn xmul(mut a: size_t, mut b: size_t) -> size_t {
+unsafe fn xmul(mut a: size_t, mut b: size_t) -> size_t {
     if b != 0 && a > SIZE_MAX.wrapping_div(b) {
         die_oom();
     }
     return a.wrapping_mul(b);
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn strappend(mut dest: *mut StringBuilder, mut src: *const libc::c_char) {
+pub unsafe fn strappend(mut dest: *mut StringBuilder, mut src: *const libc::c_char) {
     let mut len = strlen(src);
     let mut new_offset = xadd((*dest).offset, len);
     if new_offset >= (*dest).size {
@@ -964,8 +858,7 @@ pub unsafe extern "C" fn strappend(mut dest: *mut StringBuilder, mut src: *const
     (*dest).offset = new_offset;
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn strappend_escape_for_mount_options(
+pub unsafe fn strappend_escape_for_mount_options(
     mut dest: *mut StringBuilder,
     mut src: *const libc::c_char,
 ) {
@@ -1001,6 +894,5 @@ pub unsafe extern "C" fn strappend_escape_for_mount_options(
         *((*dest).str_0).offset(fresh2 as isize) = *src;
         unescaped = true;
         src = src.offset(1);
-        src;
     }
 }

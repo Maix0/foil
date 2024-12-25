@@ -405,7 +405,7 @@ pub struct StringBuilder {
 }
 
 #[inline]
-pub unsafe extern "C" fn steal_pointer(mut pp: *mut libc::c_void) -> *mut libc::c_void {
+pub unsafe fn steal_pointer(mut pp: *mut libc::c_void) -> *mut libc::c_void {
     let mut ptr = pp as *mut *mut libc::c_void;
     let mut ref_0 = 0 as *mut libc::c_void;
     ref_0 = *ptr;
@@ -413,7 +413,6 @@ pub unsafe extern "C" fn steal_pointer(mut pp: *mut libc::c_void) -> *mut libc::
     return ref_0;
 }
 
-#[no_mangle]
 pub static mut bwrap_level_prefix: bool = true;
 
 #[macro_export]

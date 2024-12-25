@@ -1,24 +1,19 @@
+use crate::*;
 use crate::{types::*, utils::xcalloc};
 use ::libc;
 use libc::strchr;
-use crate::*;
 
-unsafe extern "C" fn skip_token(
-    mut line: *mut libc::c_char,
-    mut eat_whitespace: bool,
-) -> *mut libc::c_char {
+unsafe fn skip_token(mut line: *mut libc::c_char, mut eat_whitespace: bool) -> *mut libc::c_char {
     while *line as libc::c_int != ' ' as i32 && *line as libc::c_int != '\n' as i32 {
         line = line.offset(1);
-        line;
     }
     if eat_whitespace as libc::c_int != 0 && *line as libc::c_int == ' ' as i32 {
         line = line.offset(1);
-        line;
     }
     return line;
 }
 
-unsafe extern "C" fn unescape_inline(mut escaped: *mut libc::c_char) -> *mut libc::c_char {
+unsafe fn unescape_inline(mut escaped: *mut libc::c_char) -> *mut libc::c_char {
     let mut unescaped = 0 as *mut libc::c_char;
     let mut res = 0 as *mut libc::c_char;
     let mut end = 0 as *const libc::c_char;
@@ -48,16 +43,14 @@ unsafe extern "C" fn unescape_inline(mut escaped: *mut libc::c_char) -> *mut lib
     return res;
 }
 
-unsafe extern "C" fn match_token(
+unsafe fn match_token(
     mut token: *const libc::c_char,
     mut token_end: *const libc::c_char,
     mut str: *const libc::c_char,
 ) -> bool {
     while token != token_end && *token as libc::c_int == *str as libc::c_int {
         token = token.offset(1);
-        token;
         str = str.offset(1);
-        str;
     }
     if token == token_end {
         return *str as libc::c_int == 0 as libc::c_int;
@@ -65,7 +58,7 @@ unsafe extern "C" fn match_token(
     return false;
 }
 
-unsafe extern "C" fn decode_mountoptions(mut options: *const libc::c_char) -> libc::c_ulong {
+unsafe fn decode_mountoptions(mut options: *const libc::c_char) -> libc::c_ulong {
     let mut token = 0 as *const libc::c_char;
     let mut end_token = 0 as *const libc::c_char;
     let mut i: libc::c_int = 0;
@@ -148,7 +141,6 @@ unsafe extern "C" fn decode_mountoptions(mut options: *const libc::c_char) -> li
                 break;
             } else {
                 i += 1;
-                i;
             }
         }
         if *end_token as libc::c_int != 0 as libc::c_int {
@@ -163,25 +155,22 @@ unsafe extern "C" fn decode_mountoptions(mut options: *const libc::c_char) -> li
     return flags;
 }
 
-unsafe extern "C" fn count_lines(mut data: *const libc::c_char) -> libc::c_uint {
+unsafe fn count_lines(mut data: *const libc::c_char) -> libc::c_uint {
     let mut count = 0 as libc::c_int as libc::c_uint;
     let mut p = data;
     while *p as libc::c_int != 0 as libc::c_int {
         if *p as libc::c_int == '\n' as i32 {
             count = count.wrapping_add(1);
-            count;
         }
         p = p.offset(1);
-        p;
     }
     if p > data && *p.offset(-(1 as libc::c_int as isize)) as libc::c_int != '\n' as i32 {
         count = count.wrapping_add(1);
-        count;
     }
     return count;
 }
 
-unsafe extern "C" fn count_mounts(mut line: *mut MountInfoLine) -> libc::c_int {
+unsafe fn count_mounts(mut line: *mut MountInfoLine) -> libc::c_int {
     let mut child = 0 as *mut MountInfoLine;
     let mut res = 0 as libc::c_int;
     if !(*line).covered {
@@ -195,16 +184,12 @@ unsafe extern "C" fn count_mounts(mut line: *mut MountInfoLine) -> libc::c_int {
     return res;
 }
 
-unsafe extern "C" fn collect_mounts(
-    mut info: *mut MountInfo,
-    mut line: *mut MountInfoLine,
-) -> *mut MountInfo {
+unsafe fn collect_mounts(mut info: *mut MountInfo, mut line: *mut MountInfoLine) -> *mut MountInfo {
     let mut child = 0 as *mut MountInfoLine;
     if !(*line).covered {
         (*info).mountpoint = xstrdup((*line).mountpoint);
         (*info).options = decode_mountoptions((*line).options);
         info = info.offset(1);
-        info;
     }
     child = (*line).first_child;
     while !child.is_null() {
@@ -214,7 +199,7 @@ unsafe extern "C" fn collect_mounts(
     return info;
 }
 
-unsafe extern "C" fn parse_mountinfo(
+unsafe fn parse_mountinfo(
     mut proc_fd: libc::c_int,
     mut root_mount: *const libc::c_char,
 ) -> MountTab {
@@ -301,7 +286,6 @@ unsafe extern "C" fn parse_mountinfo(
             root = i as libc::c_int;
         }
         i = i.wrapping_add(1);
-        i;
         line = next_line;
     }
     assert!(i == n_lines);
@@ -325,7 +309,6 @@ unsafe extern "C" fn parse_mountinfo(
         let ref mut fresh6 = *by_id.offset((*lines.offset(i as isize)).id as isize);
         *fresh6 = &mut *lines.offset(i as isize) as *mut MountInfoLine;
         i = i.wrapping_add(1);
-        i;
     }
     i = 0 as libc::c_int as libc::c_uint;
     while i < n_lines {
@@ -358,7 +341,6 @@ unsafe extern "C" fn parse_mountinfo(
             }
         }
         i = i.wrapping_add(1);
-        i;
     }
     n_mounts = count_mounts(&mut *lines.offset(root as isize));
     mount_tab = xcalloc(
@@ -376,9 +358,8 @@ unsafe extern "C" fn parse_mountinfo(
         steal_pointer(&mut mount_tab as *mut MountTab as *mut libc::c_void)
     }) as MountTab;
 }
-#[no_mangle]
 
-pub unsafe extern "C" fn bind_mount(
+pub unsafe fn bind_mount(
     mut proc_fd: libc::c_int,
     mut src: *const libc::c_char,
     mut dest: *const libc::c_char,
@@ -541,13 +522,12 @@ pub unsafe extern "C" fn bind_mount(
                 return BIND_MOUNT_ERROR_REMOUNT_SUBMOUNT;
             }
             i += 1;
-            i;
         }
     }
     return BIND_MOUNT_SUCCESS;
 }
 
-unsafe extern "C" fn bind_mount_result_to_string(
+unsafe fn bind_mount_result_to_string(
     mut res: bind_mount_result,
     mut failing_path: *const libc::c_char,
     mut want_errno_p: *mut bool,

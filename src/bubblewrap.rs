@@ -215,7 +215,7 @@ static mut ns_infos: [NsInfo; 7] = unsafe {
 static mut ops: *mut SetupOp = std::ptr::null_mut() as *mut SetupOp;
 #[inline]
 
-unsafe extern "C" fn _op_append_new() -> *mut SetupOp {
+unsafe fn _op_append_new() -> *mut SetupOp {
     let mut self_0 = xcalloc(
         1 as libc::c_int as size_t,
         ::core::mem::size_of::<SetupOp>(),
@@ -231,7 +231,7 @@ unsafe extern "C" fn _op_append_new() -> *mut SetupOp {
 
 static mut last_op: *mut SetupOp = std::ptr::null_mut() as *mut SetupOp;
 
-unsafe extern "C" fn setup_op_new(mut type_0: SetupOpType) -> *mut SetupOp {
+unsafe fn setup_op_new(mut type_0: SetupOpType) -> *mut SetupOp {
     let mut op = _op_append_new();
     (*op).type_0 = type_0;
     (*op).fd = -(1 as libc::c_int);
@@ -244,7 +244,7 @@ static mut lock_files: *mut LockFile = std::ptr::null_mut() as *mut LockFile;
 static mut last_lock_file: *mut LockFile = std::ptr::null_mut() as *mut LockFile;
 #[inline]
 
-unsafe extern "C" fn _lock_file_append_new() -> *mut LockFile {
+unsafe fn _lock_file_append_new() -> *mut LockFile {
     let mut self_0 = xcalloc(
         1 as libc::c_int as size_t,
         ::core::mem::size_of::<LockFile>(),
@@ -258,14 +258,14 @@ unsafe extern "C" fn _lock_file_append_new() -> *mut LockFile {
     return self_0;
 }
 
-unsafe extern "C" fn lock_file_new(mut path: *const libc::c_char) -> *mut LockFile {
+unsafe fn lock_file_new(mut path: *const libc::c_char) -> *mut LockFile {
     let mut lock = _lock_file_append_new();
     (*lock).path = path;
     return lock;
 }
 #[inline]
 
-unsafe extern "C" fn _seccomp_program_append_new() -> *mut SeccompProgram {
+unsafe fn _seccomp_program_append_new() -> *mut SeccompProgram {
     let mut self_0 = xcalloc(
         1 as libc::c_int as size_t,
         ::core::mem::size_of::<SeccompProgram>(),
@@ -283,7 +283,7 @@ static mut seccomp_programs: *mut SeccompProgram = std::ptr::null_mut() as *mut 
 
 static mut last_seccomp_program: *mut SeccompProgram = std::ptr::null_mut() as *mut SeccompProgram;
 
-unsafe extern "C" fn seccomp_program_new(mut fd: *mut libc::c_int) -> *mut SeccompProgram {
+unsafe fn seccomp_program_new(mut fd: *mut libc::c_int) -> *mut SeccompProgram {
     let mut self_0 = _seccomp_program_append_new();
     let mut data = std::ptr::null_mut() as *mut libc::c_char;
     let mut len: size_t = 0;
@@ -305,7 +305,7 @@ unsafe extern "C" fn seccomp_program_new(mut fd: *mut libc::c_int) -> *mut Secco
     return self_0;
 }
 
-unsafe extern "C" fn seccomp_programs_apply() {
+unsafe fn seccomp_programs_apply() {
     let mut program = 0 as *mut SeccompProgram;
     program = seccomp_programs;
     while !program.is_null() {
@@ -327,7 +327,7 @@ unsafe extern "C" fn seccomp_programs_apply() {
     }
 }
 
-unsafe extern "C" fn usage(mut ecode: libc::c_int, mut out: *mut FILE) {
+unsafe fn usage(mut ecode: libc::c_int, mut out: *mut FILE) {
     fprintf(
         out,
         b"usage: %s [OPTIONS...] [--] COMMAND [ARGS...]\n\n\0" as *const u8 as *const libc::c_char,
@@ -345,7 +345,7 @@ unsafe extern "C" fn usage(mut ecode: libc::c_int, mut out: *mut FILE) {
     exit(ecode);
 }
 
-unsafe extern "C" fn handle_die_with_parent() {
+unsafe fn handle_die_with_parent() {
     if opt_die_with_parent as libc::c_int != 0
         && prctl(
             PR_SET_PDEATHSIG,
@@ -359,7 +359,7 @@ unsafe extern "C" fn handle_die_with_parent() {
     }
 }
 
-unsafe extern "C" fn block_sigchild() {
+unsafe fn block_sigchild() {
     let mut mask = std::mem::zeroed();
     let mut status: libc::c_int = 0;
     sigemptyset(&mut mask);
@@ -375,7 +375,7 @@ unsafe extern "C" fn block_sigchild() {
     while waitpid(-(1 as libc::c_int), &mut status, WNOHANG) > 0 as libc::c_int {}
 }
 
-unsafe extern "C" fn unblock_sigchild() {
+unsafe fn unblock_sigchild() {
     let mut mask = std::mem::zeroed();
     sigemptyset(&mut mask);
     sigaddset(&mut mask, libc::SIGCHLD);
@@ -389,10 +389,7 @@ unsafe extern "C" fn unblock_sigchild() {
     }
 }
 
-unsafe extern "C" fn close_extra_fds(
-    mut data: *mut libc::c_void,
-    mut fd: libc::c_int,
-) -> libc::c_int {
+unsafe fn close_extra_fds(mut data: *mut libc::c_void, mut fd: libc::c_int) -> libc::c_int {
     let mut extra_fds = data as *mut libc::c_int;
     let mut i: libc::c_int = 0;
     i = 0 as libc::c_int;
@@ -401,7 +398,6 @@ unsafe extern "C" fn close_extra_fds(
             return 0 as libc::c_int;
         }
         i += 1;
-        i;
     }
     if fd <= 2 as libc::c_int {
         return 0 as libc::c_int;
@@ -410,7 +406,7 @@ unsafe extern "C" fn close_extra_fds(
     return 0 as libc::c_int;
 }
 
-unsafe extern "C" fn propagate_exit_status(mut status: libc::c_int) -> libc::c_int {
+unsafe fn propagate_exit_status(mut status: libc::c_int) -> libc::c_int {
     if status & 0x7f as libc::c_int == 0 as libc::c_int {
         return (status & 0xff00 as libc::c_int) >> 8 as libc::c_int;
     }
@@ -423,21 +419,14 @@ unsafe extern "C" fn propagate_exit_status(mut status: libc::c_int) -> libc::c_i
     return 255 as libc::c_int;
 }
 
-unsafe extern "C" fn dump_info(
-    mut fd: libc::c_int,
-    mut output: *const libc::c_char,
-    mut exit_on_error: bool,
-) {
+unsafe fn dump_info(mut fd: libc::c_int, mut output: *const libc::c_char, mut exit_on_error: bool) {
     let mut len = strlen(output);
     if write_to_fd(fd, output, len as ssize_t) != 0 && exit_on_error {
         die_with_error!(b"Write to info_fd\0" as *const u8 as *const libc::c_char);
     }
 }
 
-unsafe extern "C" fn report_child_exit_status(
-    mut exitc: libc::c_int,
-    mut setup_finished_fd: libc::c_int,
-) {
+unsafe fn report_child_exit_status(mut exitc: libc::c_int, mut setup_finished_fd: libc::c_int) {
     let mut s: ssize_t = 0;
     let mut data: [libc::c_char; 2] = [0; 2];
     let mut output = std::ptr::null_mut() as *mut libc::c_char;
@@ -470,7 +459,7 @@ unsafe extern "C" fn report_child_exit_status(
     close(setup_finished_fd);
 }
 
-unsafe extern "C" fn monitor_child(
+unsafe fn monitor_child(
     mut event_fd: libc::c_int,
     mut child_pid: pid_t,
     mut setup_finished_fd: libc::c_int,
@@ -519,9 +508,7 @@ unsafe extern "C" fn monitor_child(
     );
     fdwalk(
         proc_fd,
-        Some(
-            close_extra_fds as unsafe extern "C" fn(*mut libc::c_void, libc::c_int) -> libc::c_int,
-        ),
+        Some(close_extra_fds as unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int),
         dont_close.as_mut_ptr() as *mut libc::c_void,
     );
     sigemptyset(&mut mask);
@@ -541,7 +528,6 @@ unsafe extern "C" fn monitor_child(
         fds[1 as libc::c_int as usize].fd = event_fd;
         fds[1 as libc::c_int as usize].events = POLLIN as libc::c_short;
         num_fds += 1;
-        num_fds;
     }
     loop {
         fds[1 as libc::c_int as usize].revents = 0 as libc::c_int as libc::c_short;
@@ -586,7 +572,7 @@ unsafe extern "C" fn monitor_child(
     }
 }
 
-unsafe extern "C" fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) -> libc::c_int {
+unsafe fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) -> libc::c_int {
     let mut initial_exit_status = 1 as libc::c_int;
     let mut lock = 0 as *mut LockFile;
     lock = lock_files;
@@ -655,14 +641,12 @@ unsafe extern "C" fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) 
         if child == initial_pid {
             initial_exit_status = propagate_exit_status(status);
             if event_fd != -(1 as libc::c_int) {
-                let mut val: u64 = 0;
-                let mut res: libc::c_int = 0;
-                val = (initial_exit_status + 1 as libc::c_int) as u64;
-                res = {
+                let mut val = (initial_exit_status + 1 as libc::c_int) as u64;
+                let _res: isize = {
                     loop {
                         let __result = write(
                             event_fd,
-                            &mut val as *mut u64 as *const libc::c_void,
+                            &raw mut val as *const libc::c_void,
                             8 as libc::c_int as size_t,
                         );
                         if !(__result == -(1) && errno!() == EINTR) {
@@ -705,7 +689,7 @@ pub const REQUIRED_CAPS_0: libc::c_long = (1 as libc::c_long)
 
 pub const REQUIRED_CAPS_1: libc::c_int = 0 as libc::c_int;
 
-unsafe extern "C" fn set_required_caps() {
+unsafe fn set_required_caps() {
     let mut hdr = {
         let mut init = __user_cap_header_struct {
             version: _LINUX_CAPABILITY_VERSION_3 as u32,
@@ -739,7 +723,7 @@ unsafe extern "C" fn set_required_caps() {
     }
 }
 
-unsafe extern "C" fn drop_all_caps(mut keep_requested_caps: bool) {
+unsafe fn drop_all_caps(mut keep_requested_caps: bool) {
     let mut hdr = {
         let mut init = __user_cap_header_struct {
             version: _LINUX_CAPABILITY_VERSION_3 as u32,
@@ -783,7 +767,7 @@ unsafe extern "C" fn drop_all_caps(mut keep_requested_caps: bool) {
     }
 }
 
-unsafe extern "C" fn has_caps() -> bool {
+unsafe fn has_caps() -> bool {
     let mut hdr = {
         let mut init = __user_cap_header_struct {
             version: _LINUX_CAPABILITY_VERSION_3 as u32,
@@ -813,11 +797,7 @@ unsafe extern "C" fn has_caps() -> bool {
         || data[1 as libc::c_int as usize].permitted != 0 as libc::c_int as libc::c_uint;
 }
 
-unsafe extern "C" fn prctl_caps(
-    mut caps: *mut u32,
-    mut do_cap_bounding: bool,
-    mut do_set_ambient: bool,
-) {
+unsafe fn prctl_caps(mut caps: *mut u32, mut do_cap_bounding: bool, mut do_set_ambient: bool) {
     let mut cap: libc::c_ulong = 0;
     cap = 0 as libc::c_int as libc::c_ulong;
     while cap <= CAP_LAST_CAP as libc::c_ulong {
@@ -868,11 +848,10 @@ unsafe extern "C" fn prctl_caps(
             }
         }
         cap = cap.wrapping_add(1);
-        cap;
     }
 }
 
-unsafe extern "C" fn drop_cap_bounding_set(mut drop_all: bool) {
+unsafe fn drop_cap_bounding_set(mut drop_all: bool) {
     if !drop_all {
         prctl_caps(requested_caps.as_mut_ptr(), true, false);
     } else {
@@ -881,14 +860,14 @@ unsafe extern "C" fn drop_cap_bounding_set(mut drop_all: bool) {
     };
 }
 
-unsafe extern "C" fn set_ambient_capabilities() {
+unsafe fn set_ambient_capabilities() {
     if is_privileged {
         return;
     }
     prctl_caps(requested_caps.as_mut_ptr(), false, true);
 }
 
-unsafe extern "C" fn acquire_privs() {
+unsafe fn acquire_privs() {
     let mut euid: uid_t = 0;
     let mut new_fsuid: uid_t = 0;
     euid = geteuid();
@@ -948,7 +927,7 @@ unsafe extern "C" fn acquire_privs() {
     }
 }
 
-unsafe extern "C" fn switch_to_user_with_privs() {
+unsafe fn switch_to_user_with_privs() {
     if opt_unshare_user as libc::c_int != 0 || opt_userns_fd != -(1 as libc::c_int) {
         drop_cap_bounding_set(false);
     }
@@ -985,7 +964,7 @@ unsafe extern "C" fn switch_to_user_with_privs() {
     set_required_caps();
 }
 
-unsafe extern "C" fn drop_privs(mut keep_requested_caps: bool, mut already_changed_uid: bool) {
+unsafe fn drop_privs(mut keep_requested_caps: bool, mut already_changed_uid: bool) {
     assert!(!keep_requested_caps || !is_privileged);
     if is_privileged as libc::c_int != 0
         && !already_changed_uid
@@ -1006,7 +985,7 @@ unsafe extern "C" fn drop_privs(mut keep_requested_caps: bool, mut already_chang
     }
 }
 
-unsafe extern "C" fn write_uid_gid_map(
+unsafe fn write_uid_gid_map(
     mut sandbox_uid: uid_t,
     mut parent_uid: uid_t,
     mut sandbox_gid: uid_t,
@@ -1104,7 +1083,7 @@ unsafe extern "C" fn write_uid_gid_map(
     }
 }
 
-unsafe extern "C" fn privileged_op(
+unsafe fn privileged_op(
     mut privileged_op_socket: libc::c_int,
     mut op: u32,
     mut flags: u32,
@@ -1355,7 +1334,7 @@ unsafe extern "C" fn privileged_op(
     };
 }
 
-unsafe extern "C" fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c_int) {
+unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c_int) {
     let mut op = 0 as *mut SetupOp;
     let mut tmp_overlay_idx = 0 as libc::c_int;
     let mut current_block_161: u64;
@@ -1637,7 +1616,6 @@ unsafe extern "C" fn setup_newroot(mut unshare_pid: bool, mut privileged_op_sock
                                 );
                             }
                             i = i.wrapping_add(1);
-                            i;
                         }
                     }
                     8 => {
@@ -1695,7 +1673,6 @@ unsafe extern "C" fn setup_newroot(mut unshare_pid: bool, mut privileged_op_sock
                                 node_dest,
                             );
                             i = i.wrapping_add(1);
-                            i;
                         }
                         i = 0 as libc::c_int as libc::c_uint;
                         while (i as libc::c_ulong)
@@ -1722,7 +1699,6 @@ unsafe extern "C" fn setup_newroot(mut unshare_pid: bool, mut privileged_op_sock
                                 );
                             }
                             i = i.wrapping_add(1);
-                            i;
                         }
                         let mut dev_fd =
                             strconcat(dest, b"/fd\0" as *const u8 as *const libc::c_char);
@@ -2031,7 +2007,7 @@ unsafe extern "C" fn setup_newroot(mut unshare_pid: bool, mut privileged_op_sock
     );
 }
 
-unsafe extern "C" fn close_ops_fd() {
+unsafe fn close_ops_fd() {
     let mut op = 0 as *mut SetupOp;
     op = ops;
     while !op.is_null() {
@@ -2043,7 +2019,7 @@ unsafe extern "C" fn close_ops_fd() {
     }
 }
 
-unsafe extern "C" fn resolve_symlinks_in_ops() {
+unsafe fn resolve_symlinks_in_ops() {
     let mut op = 0 as *mut SetupOp;
     op = ops;
     while !op.is_null() {
@@ -2072,7 +2048,7 @@ unsafe extern "C" fn resolve_symlinks_in_ops() {
     }
 }
 
-unsafe extern "C" fn resolve_string_offset(
+unsafe fn resolve_string_offset(
     mut buffer: *mut libc::c_void,
     mut buffer_size: size_t,
     mut offset: u32,
@@ -2090,7 +2066,7 @@ unsafe extern "C" fn resolve_string_offset(
     return (buffer as *const libc::c_char).offset(offset as isize);
 }
 
-unsafe extern "C" fn read_priv_sec_op(
+unsafe fn read_priv_sec_op(
     mut read_socket: libc::c_int,
     mut buffer: *mut libc::c_void,
     mut buffer_size: size_t,
@@ -2131,7 +2107,7 @@ unsafe extern "C" fn read_priv_sec_op(
     return (*op).op;
 }
 
-unsafe extern "C" fn print_version_and_exit() -> ! {
+unsafe fn print_version_and_exit() -> ! {
     printf(
         b"%s\n\0" as *const u8 as *const libc::c_char,
         PACKAGE_STRING.as_ptr(),
@@ -2139,13 +2115,13 @@ unsafe extern "C" fn print_version_and_exit() -> ! {
     exit(0 as libc::c_int);
 }
 
-unsafe extern "C" fn is_modifier_option(mut option: *const libc::c_char) -> libc::c_int {
+unsafe fn is_modifier_option(mut option: *const libc::c_char) -> libc::c_int {
     return (strcmp(option, b"--perms\0" as *const u8 as *const libc::c_char) == 0 as libc::c_int
         || strcmp(option, b"--size\0" as *const u8 as *const libc::c_char) == 0 as libc::c_int)
         as libc::c_int;
 }
 
-unsafe extern "C" fn warn_only_last_option(mut name: *const libc::c_char) {
+unsafe fn warn_only_last_option(mut _name: *const libc::c_char) {
     bwrap_log!(
         LOG_WARNING,
         b"Only the last %s option will take effect\0" as *const u8 as *const libc::c_char,
@@ -2153,7 +2129,7 @@ unsafe extern "C" fn warn_only_last_option(mut name: *const libc::c_char) {
     );
 }
 
-unsafe extern "C" fn make_setup_overlay_src_ops(argv: *const *const libc::c_char) {
+unsafe fn make_setup_overlay_src_ops(argv: *const *const libc::c_char) {
     let mut i: libc::c_int = 0;
     let mut op = 0 as *mut SetupOp;
     i = 1 as libc::c_int;
@@ -2161,12 +2137,11 @@ unsafe extern "C" fn make_setup_overlay_src_ops(argv: *const *const libc::c_char
         op = setup_op_new(SETUP_OVERLAY_SRC);
         (*op).source = *argv.offset((1 as libc::c_int - 2 as libc::c_int * i) as isize);
         i += 1;
-        i;
     }
     next_overlay_src_count = 0 as libc::c_int;
 }
 
-unsafe extern "C" fn parse_args_recurse(
+unsafe fn parse_args_recurse(
     mut argcp: *mut libc::c_int,
     mut argvp: *mut *mut *const libc::c_char,
     mut in_file: bool,
@@ -2234,9 +2209,7 @@ unsafe extern "C" fn parse_args_recurse(
             p = opt_args_data;
             while !p.is_null() && p < data_end {
                 data_argc += 1;
-                data_argc;
                 *total_parsed_argc_p += 1;
-                *total_parsed_argc_p;
                 if *total_parsed_argc_p > MAX_ARGS {
                     die!(
                         b"Exceeded maximum number of arguments %u\0" as *const u8
@@ -2251,7 +2224,6 @@ unsafe extern "C" fn parse_args_recurse(
                 ) as *const libc::c_char;
                 if !p.is_null() {
                     p = p.offset(1);
-                    p;
                 }
             }
             data_argv = xcalloc(
@@ -2272,7 +2244,6 @@ unsafe extern "C" fn parse_args_recurse(
                 ) as *const libc::c_char;
                 if !p.is_null() {
                     p = p.offset(1);
-                    p;
                 }
             }
             data_argv_copy = data_argv;
@@ -2294,9 +2265,7 @@ unsafe extern "C" fn parse_args_recurse(
             }
             opt_argv0 = *argv.offset(1 as libc::c_int as isize);
             argv = argv.offset(1);
-            argv;
             argc -= 1;
-            argc;
         } else if strcmp(arg, b"--level-prefix\0" as *const u8 as *const libc::c_char)
             == 0 as libc::c_int
         {
@@ -2362,9 +2331,7 @@ unsafe extern "C" fn parse_args_recurse(
             }
             opt_chdir_path = *argv.offset(1 as libc::c_int as isize);
             argv = argv.offset(1);
-            argv;
             argc -= 1;
-            argc;
         } else if strcmp(
             arg,
             b"--disable-userns\0" as *const u8 as *const libc::c_char,
@@ -2386,9 +2353,7 @@ unsafe extern "C" fn parse_args_recurse(
             op = setup_op_new(SETUP_REMOUNT_RO_NO_RECURSIVE);
             (*op).dest = *argv.offset(1 as libc::c_int as isize);
             argv = argv.offset(1);
-            argv;
             argc -= 1;
-            argc;
         } else if strcmp(arg, b"--bind\0" as *const u8 as *const libc::c_char) == 0 as libc::c_int
             || strcmp(arg, b"--bind-try\0" as *const u8 as *const libc::c_char) == 0 as libc::c_int
         {
@@ -2500,7 +2465,6 @@ unsafe extern "C" fn parse_args_recurse(
                 );
             }
             next_overlay_src_count += 1;
-            next_overlay_src_count;
             argv = argv.offset(1 as libc::c_int as isize);
             argc -= 1 as libc::c_int;
         } else if strcmp(arg, b"--overlay\0" as *const u8 as *const libc::c_char)
@@ -2552,7 +2516,6 @@ unsafe extern "C" fn parse_args_recurse(
             (*op).dest = *argv.offset(1 as libc::c_int as isize);
             make_setup_overlay_src_ops(argv);
             opt_tmp_overlay_count += 1;
-            opt_tmp_overlay_count;
             argv = argv.offset(1 as libc::c_int as isize);
             argc -= 1 as libc::c_int;
         } else if strcmp(arg, b"--ro-overlay\0" as *const u8 as *const libc::c_char)
@@ -3432,18 +3395,13 @@ unsafe extern "C" fn parse_args_recurse(
             );
         }
         argv = argv.offset(1);
-        argv;
         argc -= 1;
-        argc;
     }
     *argcp = argc;
     *argvp = argv;
 }
 
-unsafe extern "C" fn parse_args(
-    mut argcp: *mut libc::c_int,
-    mut argvp: *mut *mut *const libc::c_char,
-) {
+unsafe fn parse_args(mut argcp: *mut libc::c_int, mut argvp: *mut *mut *const libc::c_char) {
     let mut total_parsed_argc = *argcp;
     parse_args_recurse(argcp, argvp, false, &mut total_parsed_argc);
     if next_overlay_src_count > 0 as libc::c_int {
@@ -3454,7 +3412,7 @@ unsafe extern "C" fn parse_args(
     }
 }
 
-unsafe extern "C" fn read_overflowids() {
+unsafe fn read_overflowids() {
     let mut uid_data = std::ptr::null_mut() as *mut libc::c_char;
     let mut gid_data = std::ptr::null_mut() as *mut libc::c_char;
     uid_data = load_file_at(
@@ -3493,7 +3451,7 @@ unsafe extern "C" fn read_overflowids() {
     }
 }
 
-unsafe extern "C" fn namespace_ids_read(mut pid: pid_t) {
+unsafe fn namespace_ids_read(mut pid: pid_t) {
     let mut dir = std::ptr::null_mut() as *mut libc::c_char;
     let mut ns_fd = -(1 as libc::c_int);
     let mut info = 0 as *mut NsInfo;
@@ -3526,11 +3484,10 @@ unsafe extern "C" fn namespace_ids_read(mut pid: pid_t) {
             }
         }
         info = info.offset(1);
-        info;
     }
 }
 
-unsafe extern "C" fn namespace_ids_write(mut fd: libc::c_int, mut in_json: bool) {
+unsafe fn namespace_ids_write(mut fd: libc::c_int, mut in_json: bool) {
     let mut info = 0 as *mut NsInfo;
     info = ns_infos.as_mut_ptr();
     while !((*info).name).is_null() {
@@ -3553,7 +3510,6 @@ unsafe extern "C" fn namespace_ids_write(mut fd: libc::c_int, mut in_json: bool)
             dump_info(fd, output, true);
         }
         info = info.offset(1);
-        info;
     }
 }
 
@@ -3604,9 +3560,7 @@ unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> lib
         host_tty_dev = ttyname(1 as libc::c_int);
     }
     argv = argv.offset(1);
-    argv;
     argc -= 1;
-    argc;
     if argc <= 0 as libc::c_int {
         usage(EXIT_FAILURE, stderr);
     }
@@ -4092,7 +4046,6 @@ unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> lib
         }
         free(dirname as *mut libc::c_void);
         i += 1;
-        i;
     }
     if pivot_root(base_path, b"oldroot\0" as *const u8 as *const libc::c_char) != 0 {
         die_with_error!(b"pivot_root\0" as *const u8 as *const libc::c_char);
@@ -4384,10 +4337,7 @@ unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> lib
             dont_close[fresh8 as usize] = -(1 as libc::c_int);
             fdwalk(
                 proc_fd,
-                Some(
-                    close_extra_fds
-                        as unsafe extern "C" fn(*mut libc::c_void, libc::c_int) -> libc::c_int,
-                ),
+                Some(close_extra_fds as unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int),
                 dont_close.as_mut_ptr() as *mut libc::c_void,
             );
             return do_init(event_fd, pid);
