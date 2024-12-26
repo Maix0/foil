@@ -1609,8 +1609,7 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                             }
                             i = i.wrapping_add(1);
                         }
-                        let dev_fd =
-                            strconcat(dest, b"/fd\0" as *const u8 as *const libc::c_char);
+                        let dev_fd = strconcat(dest, b"/fd\0" as *const u8 as *const libc::c_char);
                         if symlink(
                             b"/proc/self/fd\0" as *const u8 as *const libc::c_char,
                             dev_fd,
@@ -1633,12 +1632,9 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                                 dev_core,
                             );
                         }
-                        let pts =
-                            strconcat(dest, b"/pts\0" as *const u8 as *const libc::c_char);
-                        let ptmx =
-                            strconcat(dest, b"/ptmx\0" as *const u8 as *const libc::c_char);
-                        let shm =
-                            strconcat(dest, b"/shm\0" as *const u8 as *const libc::c_char);
+                        let pts = strconcat(dest, b"/pts\0" as *const u8 as *const libc::c_char);
+                        let ptmx = strconcat(dest, b"/ptmx\0" as *const u8 as *const libc::c_char);
+                        let shm = strconcat(dest, b"/shm\0" as *const u8 as *const libc::c_char);
                         if mkdir(shm, 0o755) == -1 {
                             die_with_error!(
                                 b"Can't create %s/shm\0" as *const u8 as *const libc::c_char,

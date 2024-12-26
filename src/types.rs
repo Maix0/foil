@@ -6,7 +6,7 @@ macro_rules! retry {
     ($e:expr) => {
         loop {
             let __result = $e;
-            if !(__result == -1 && errno!() == EINTR) {
+            if !(__result == -1 && unsafe { errno!() == EINTR }) {
                 break __result;
             }
         }

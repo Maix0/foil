@@ -2,6 +2,7 @@ use crate::types::*;
 use crate::*;
 use ::libc;
 
+use std::os::fd::RawFd;
 use std::ptr::addr_of_mut;
 
 unsafe fn add_rta(header: *mut nlmsghdr, rta_type: libc::c_int, size: usize) -> *mut libc::c_void {
@@ -81,7 +82,7 @@ unsafe fn rtnl_read_reply(rtnl_fd: std::os::fd::RawFd, seq_nr: libc::c_uint) -> 
     }
 }
 
-unsafe fn rtnl_do_request(rtnl_fd: libc::c_int, header: *mut nlmsghdr) -> libc::c_int {
+unsafe fn rtnl_do_request(rtnl_fd: RawFd, header: *mut nlmsghdr) -> libc::c_int {
     if rtnl_send_request(rtnl_fd, header) != 0 {
         return -1;
     }

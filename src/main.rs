@@ -27,7 +27,6 @@ pub mod _macros {
     }
 }
 
-
 pub fn main() {
     let mut args: Vec<*mut libc::c_char> = Vec::new();
     for arg in ::std::env::args() {
