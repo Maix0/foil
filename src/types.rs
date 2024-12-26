@@ -546,4 +546,4 @@ pub const CAP_CHECKPOINT_RESTORE: libc::c_int = 40;
 pub const CAP_LAST_CAP: libc::c_int = 40;
 
 pub const PACKAGE_STRING: [libc::c_char; 18] =
-    unsafe { *::core::mem::transmute::<&[u8; 18], &[libc::c_char; 18]>(b"bubblewrap 0.11.0\0") };
+    unsafe { *::core::mem::transmute::<&[u8; 18], &[libc::c_char; 18]>(c"bubblewrap 0.11.0".as_ptr()) };

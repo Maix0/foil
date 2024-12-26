@@ -211,7 +211,7 @@ pub unsafe fn fdwalk(
     let mut d = 0 as *mut DIR;
     dfd = retry!(openat(
         proc_fd,
-        b"self/fd\0" as *const u8 as *const libc::c_char,
+        c"self/fd".as_ptr(),
         0o200000 | 0o4000 | 0o2000000 | 0o400,
     ));
     if dfd == -1 {
@@ -599,7 +599,7 @@ pub unsafe fn send_pid_on_socket(sockfd: libc::c_int) {
         }
     } < 0
     {
-        die_with_error!(b"Can't send pid\0" as *const u8 as *const libc::c_char);
+        die_with_error!(c"Can't send pid".as_ptr());
     }
 }
 
@@ -613,7 +613,7 @@ pub unsafe fn create_pid_socketpair(sockets: *mut libc::c_int) {
     ) != 0
     {
         die_with_error!(
-            b"Can't create intermediate pids socket\0" as *const u8 as *const libc::c_char,
+            c"Can't create intermediate pids socket".as_ptr(),
         );
     }
     if setsockopt(
@@ -624,7 +624,7 @@ pub unsafe fn create_pid_socketpair(sockets: *mut libc::c_int) {
         ::core::mem::size_of::<libc::c_int>() as libc::c_ulong as socklen_t,
     ) < 0
     {
-        die_with_error!(b"Can't set SO_PASSCRED\0" as *const u8 as *const libc::c_char);
+        die_with_error!(c"Can't set SO_PASSCRED".as_ptr());
     }
 }
 
@@ -724,14 +724,14 @@ pub unsafe fn get_oldroot_path(mut path: *const libc::c_char) -> *mut libc::c_ch
     while *path as libc::c_int == '/' as i32 {
         path = path.offset(1);
     }
-    return strconcat(b"/oldroot/\0" as *const u8 as *const libc::c_char, path);
+    return strconcat(c"/oldroot/".as_ptr(), path);
 }
 
 pub unsafe fn get_newroot_path(mut path: *const libc::c_char) -> *mut libc::c_char {
     while *path as libc::c_int == '/' as i32 {
         path = path.offset(1);
     }
-    return strconcat(b"/newroot/\0" as *const u8 as *const libc::c_char, path);
+    return strconcat(c"/newroot/".as_ptr(), path);
 }
 
 pub unsafe fn raw_clone(flags: libc::c_ulong, child_stack: *mut libc::c_void) -> libc::c_int {

@@ -6,35 +6,35 @@ use libc::strchr;
 static mut FLAG_DATA: [MountOptionHumanReadable; 9] = [
     MountOptionHumanReadable {
         flag: 0,
-        name: b"rw\0" as *const u8 as *const libc::c_char,
+        name: c"rw".as_ptr(),
     },
     MountOptionHumanReadable {
         flag: MS_RDONLY as _,
-        name: b"ro\0" as *const u8 as *const libc::c_char,
+        name: c"ro".as_ptr(),
     },
     MountOptionHumanReadable {
         flag: MS_NOSUID as _,
-        name: b"nosuid\0" as *const u8 as *const libc::c_char,
+        name: c"nosuid".as_ptr(),
     },
     MountOptionHumanReadable {
         flag: MS_NODEV as _,
-        name: b"nodev\0" as *const u8 as *const libc::c_char,
+        name: c"nodev".as_ptr(),
     },
     MountOptionHumanReadable {
         flag: MS_NOEXEC as _,
-        name: b"noexec\0" as *const u8 as *const libc::c_char,
+        name: c"noexec".as_ptr(),
     },
     MountOptionHumanReadable {
         flag: MS_NOATIME as _,
-        name: b"noatime\0" as *const u8 as *const libc::c_char,
+        name: c"noatime".as_ptr(),
     },
     MountOptionHumanReadable {
         flag: MS_NODIRATIME as _,
-        name: b"nodiratime\0" as *const u8 as *const libc::c_char,
+        name: c"nodiratime".as_ptr(),
     },
     MountOptionHumanReadable {
         flag: MS_RELATIME as _,
-        name: b"relatime\0" as *const u8 as *const libc::c_char,
+        name: c"relatime".as_ptr(),
     },
     MountOptionHumanReadable {
         flag: 0,
@@ -225,7 +225,7 @@ unsafe fn parse_mountinfo(proc_fd: libc::c_int, root_mount: *const libc::c_char)
             &mut consumed as *mut libc::c_int,
         );
         if rc != 4 {
-            die!(b"Can't parse mountinfo line\0" as *const u8 as *const libc::c_char);
+            die!(c"Can't parse mountinfo line".as_ptr());
         }
         let mut rest = line.offset(consumed as isize);
         rest = skip_token(rest, true);
@@ -348,7 +348,7 @@ pub unsafe fn bind_mount(
         return BIND_MOUNT_ERROR_REOPEN_DEST;
     }
     let dest_proc = xasprintf(
-        b"/proc/self/fd/%d\0" as *const u8 as *const libc::c_char,
+        c"/proc/self/fd/%d".as_ptr(),
         dest_fd,
     );
     let oldroot_dest_proc = get_oldroot_path(dest_proc);

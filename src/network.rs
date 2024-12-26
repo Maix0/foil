@@ -126,7 +126,7 @@ pub unsafe fn loopback_setup() {
     let mut ip_addr = std::ptr::null_mut() as *mut in_addr;
     *addr_of_mut!((*src_addr.as_mut_ptr()).nl_pid) = getpid() as _;
 
-    if_loopback = if_nametoindex(b"lo\0" as *const u8 as *const libc::c_char) as libc::c_int;
+    if_loopback = if_nametoindex(c"lo".as_ptr()) as libc::c_int;
     if if_loopback <= 0 {
         die_with_error!(c"loopback: Failed to look up lo".as_ptr());
     }
