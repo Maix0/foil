@@ -162,7 +162,7 @@ pub unsafe fn strconcat(
     mut s1: *const libc::c_char,
     mut s2: *const libc::c_char,
 ) -> *mut libc::c_char {
-    let mut len = 0 as size_t;
+    let mut len = 0 as usize;
     let mut res = 0 as *mut libc::c_char;
     if !s1.is_null() {
         len = (len).wrapping_add(strlen(s1)) as size_t as size_t;
@@ -186,7 +186,7 @@ pub unsafe fn strconcat3(
     mut s2: *const libc::c_char,
     mut s3: *const libc::c_char,
 ) -> *mut libc::c_char {
-    let mut len = 0 as size_t;
+    let mut len = 0 as usize;
     let mut res = 0 as *mut libc::c_char;
     if !s1.is_null() {
         len = (len).wrapping_add(strlen(s1));
@@ -248,7 +248,7 @@ pub unsafe fn fdwalk(
             }
             let mut l: libc::c_long = 0;
             let mut e = std::ptr::null_mut();
-            if (*de).d_name[0 as usize] as libc::c_int == '.' as i32 {
+            if (*de).d_name[0] as libc::c_int == '.' as i32 {
                 continue;
             }
             errno!() = 0;
@@ -450,8 +450,8 @@ pub unsafe fn load_file_data(mut fd: libc::c_int, mut size: *mut size_t) -> *mut
     let mut data_read: ssize_t = 0;
     let mut data_len: ssize_t = 0;
     let mut res: ssize_t = 0;
-    data_read = 0 as ssize_t;
-    data_len = 4080 as ssize_t;
+    data_read = 0;
+    data_len = 4080;
     data = xmalloc(data_len as size_t) as *mut libc::c_char;
     loop {
         if data_len == data_read + 1 {
@@ -608,7 +608,7 @@ pub unsafe fn send_pid_on_socket(mut sockfd: libc::c_int) {
     let mut cmsg = std::ptr::null_mut() as *mut cmsghdr;
     let mut cred: ucred = std::mem::zeroed();
     msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1 as size_t;
+    msg.msg_iovlen = 1;
     msg.msg_control = control_buf_snd.as_mut_ptr() as *mut libc::c_void;
     msg.msg_controllen = control_len_snd as size_t;
     cmsg = if msg.msg_controllen >= ::core::mem::size_of::<cmsghdr>() {
@@ -656,7 +656,7 @@ pub unsafe fn create_pid_socketpair(mut sockets: *mut libc::c_int) {
         );
     }
     if setsockopt(
-        *sockets.offset(0 as isize),
+        *sockets.offset(0),
         libc::SOL_SOCKET,
         libc::SO_PASSCRED,
         &mut enable as *mut libc::c_int as *const libc::c_void,
@@ -688,7 +688,7 @@ pub unsafe fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::c_int {
     let mut control_buf_rcv: Vec<libc::c_char> = ::std::vec::from_elem(0, vla);
     let mut cmsg = std::ptr::null_mut();
     msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1 as size_t;
+    msg.msg_iovlen = 1;
     msg.msg_control = control_buf_rcv.as_mut_ptr() as *mut libc::c_void;
     msg.msg_controllen = control_len_rcv as size_t;
     if loop {
@@ -739,7 +739,7 @@ pub unsafe fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::c_int {
 }
 
 pub unsafe fn readlink_malloc(mut pathname: *const libc::c_char) -> *mut libc::c_char {
-    let mut size = 50 as size_t;
+    let mut size = 50;
     let mut n: ssize_t = 0;
     let mut value = std::ptr::null_mut();
     loop {
@@ -840,7 +840,7 @@ pub unsafe fn strappend(mut dest: *mut StringBuilder, mut src: *const libc::c_ch
     let mut len = strlen(src);
     let mut new_offset = xadd((*dest).offset, len);
     if new_offset >= (*dest).size {
-        (*dest).size = xmul(xadd(new_offset, 1 as size_t), 2 as size_t);
+        (*dest).size = xmul(xadd(new_offset, 1), 2);
         (*dest).str_0 =
             xrealloc((*dest).str_0 as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
     }
@@ -862,7 +862,7 @@ pub unsafe fn strappend_escape_for_mount_options(
             (*dest).size = if 64 > xmul((*dest).size, 2) {
                 64
             } else {
-                xmul((*dest).size, 2 as size_t)
+                xmul((*dest).size, 2)
             };
             (*dest).str_0 =
                 xrealloc((*dest).str_0 as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
@@ -874,18 +874,18 @@ pub unsafe fn strappend_escape_for_mount_options(
             }
             92 | 44 | 58 => {
                 if unescaped {
-                    let fresh1 = (*dest).offset;
+                    let fresh1 = (*dest).offset as isize;
                     (*dest).offset = ((*dest).offset).wrapping_add(1);
-                    *((*dest).str_0).offset(fresh1 as isize) = '\\' as i8;
+                    *((*dest).str_0).offset(fresh1) = '\\' as i8;
                     unescaped = false;
                     continue;
                 }
             }
             _ => {}
         }
-        let fresh2 = (*dest).offset;
+        let fresh2 = (*dest).offset as isize;
         (*dest).offset = ((*dest).offset).wrapping_add(1);
-        *((*dest).str_0).offset(fresh2 as isize) = *src;
+        *((*dest).str_0).offset(fresh2) = *src;
         unescaped = true;
         src = src.offset(1);
     }

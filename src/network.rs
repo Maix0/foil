@@ -20,7 +20,7 @@ unsafe fn add_rta(
             .wrapping_sub(1)
             & !NLMSG_ALIGNTO.wrapping_sub(1)) as isize,
     ) as *mut rtattr;
-    (*rta).rta_type = type_0 as u16;
+    (*rta).rta_type = type_0 as _;
     (*rta).rta_len = rta_size as libc::c_ushort;
     (*header).nlmsg_len = (((*header).nlmsg_len)
         .wrapping_add(NLMSG_ALIGNTO)
@@ -131,11 +131,11 @@ unsafe fn rtnl_setup_request(
 ) -> *mut nlmsghdr {
     let mut header = 0 as *mut nlmsghdr;
     let mut len = size.wrapping_add(NLMSG_HDRLEN as _);
-    static mut counter: u32 = 0 as u32;
+    static mut counter: u32 = 0;
     memset(buffer as *mut libc::c_void, 0, len);
     header = buffer as *mut nlmsghdr;
     (*header).nlmsg_len = len as u32;
-    (*header).nlmsg_type = type_0 as u16;
+    (*header).nlmsg_type = type_0 as _;
     (*header).nlmsg_flags = (flags | libc::NLM_F_REQUEST) as u16;
     let fresh0 = counter;
     counter = counter.wrapping_add(1);
@@ -191,7 +191,7 @@ pub unsafe fn loopback_setup() {
     addmsg = (header as *mut libc::c_char).offset(NLMSG_HDRLEN as libc::c_int as isize)
         as *mut libc::c_void as *mut ifaddrmsg;
     (*addmsg).ifa_family = libc::AF_INET as u8;
-    (*addmsg).ifa_prefixlen = 8 as u8;
+    (*addmsg).ifa_prefixlen = 8;
     (*addmsg).ifa_flags = libc::IFA_F_PERMANENT as u8;
     (*addmsg).ifa_scope = libc::RT_SCOPE_HOST as libc::c_int as u8;
     (*addmsg).ifa_index = if_loopback as u32;

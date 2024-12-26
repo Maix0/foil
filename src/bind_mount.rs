@@ -24,11 +24,11 @@ unsafe fn unescape_inline(mut escaped: *mut libc::c_char) -> *mut libc::c_char {
         if *escaped as libc::c_int == '\\' as i32 {
             let fresh0 = unescaped;
             unescaped = unescaped.offset(1);
-            *fresh0 = ((*escaped.offset(1 as isize) as libc::c_int - '0' as i32) << 6
-                | (*escaped.offset(2 as isize) as libc::c_int - '0' as i32) << 3
-                | (*escaped.offset(3 as isize) as libc::c_int - '0' as i32) << 0)
+            *fresh0 = ((*escaped.offset(1) as libc::c_int - '0' as i32) << 6
+                | (*escaped.offset(2) as libc::c_int - '0' as i32) << 3
+                | (*escaped.offset(3) as libc::c_int - '0' as i32) << 0)
                 as libc::c_char;
-            escaped = escaped.offset(4 as isize);
+            escaped = escaped.offset(4);
         } else {
             let fresh1 = escaped;
             escaped = escaped.offset(1);
@@ -142,7 +142,7 @@ unsafe fn decode_mountoptions(mut options: *const libc::c_char) -> libc::c_ulong
             }
         }
         if *end_token as libc::c_int != 0 {
-            token = end_token.offset(1 as isize);
+            token = end_token.offset(1);
         } else {
             token = std::ptr::null_mut();
         }
@@ -162,7 +162,7 @@ unsafe fn count_lines(mut data: *const libc::c_char) -> libc::c_uint {
         }
         p = p.offset(1);
     }
-    if p > data && *p.offset(-(1 as isize)) as libc::c_int != '\n' as i32 {
+    if p > data && *p.offset(-(1)) as libc::c_int != '\n' as i32 {
         count = count.wrapping_add(1);
     }
     return count;
@@ -242,7 +242,7 @@ unsafe fn parse_mountinfo(
         end = strchr(line, '\n' as i32);
         if !end.is_null() {
             *end = 0;
-            next_line = end.offset(1 as isize);
+            next_line = end.offset(1);
         } else {
             next_line = line.offset(strlen(line) as isize);
         }
@@ -288,7 +288,7 @@ unsafe fn parse_mountinfo(
     }
     assert!(i == n_lines);
     if root == -1 {
-        mount_tab = xcalloc(1 as size_t, ::core::mem::size_of::<MountInfo>()) as MountTab;
+        mount_tab = xcalloc(1, ::core::mem::size_of::<MountInfo>()) as MountTab;
         return (if 0 != 0 {
             mount_tab as *mut libc::c_void
         } else {
@@ -343,7 +343,7 @@ unsafe fn parse_mountinfo(
         ::core::mem::size_of::<MountInfo>(),
     ) as MountTab;
     end_tab = collect_mounts(
-        &mut *mount_tab.offset(0 as isize),
+        &mut *mount_tab.offset(0),
         &mut *lines.offset(root as isize),
     );
     assert!(end_tab == &mut *mount_tab.offset(n_mounts as isize) as *mut MountInfo);
@@ -432,7 +432,7 @@ pub unsafe fn bind_mount(
         return BIND_MOUNT_ERROR_READLINK_DEST_PROC_FD;
     }
     mount_tab = parse_mountinfo(proc_fd, kernel_case_combination);
-    if ((*mount_tab.offset(0 as isize)).mountpoint).is_null() {
+    if ((*mount_tab.offset(0)).mountpoint).is_null() {
         if !failing_path.is_null() {
             *failing_path = (if 0 != 0 {
                 kernel_case_combination as *mut libc::c_void
@@ -446,10 +446,10 @@ pub unsafe fn bind_mount(
         return BIND_MOUNT_ERROR_FIND_DEST_MOUNT;
     }
     assert!(path_equal(
-        (*mount_tab.offset(0 as isize)).mountpoint,
+        (*mount_tab.offset(0)).mountpoint,
         kernel_case_combination,
     ));
-    current_flags = (*mount_tab.offset(0 as isize)).options;
+    current_flags = (*mount_tab.offset(0)).options;
     new_flags = current_flags
         | (if devices as libc::c_int != 0 {
             0
