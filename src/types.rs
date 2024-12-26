@@ -437,7 +437,7 @@ macro_rules! bwrap_log {
 macro_rules! die_with_error {
     ($($e:expr),* $(,)?) => {
         let v = ($($e, )*);
-        panic!("with_error: {:?}", std::ffi::CStr::from_ptr(v.0));
+        panic!("with_error: {:?}", unsafe{ std::ffi::CStr::from_ptr(v.0)});
     };
 }
 
@@ -453,7 +453,7 @@ macro_rules! die_with_bind_result {
 macro_rules! die_with_mount_error {
     ($($e:expr),* $(,)?) => {
         let v = ($($e, )*);
-        panic!("with_error: {:?}", std::ffi::CStr::from_ptr(v.0));
+        panic!("with_error: {:?}", unsafe {std::ffi::CStr::from_ptr(v.0)});
     };
 }
 
@@ -463,7 +463,7 @@ pub use libc::fprintf;
 macro_rules! die {
     ($($e:expr),* $(,)?) => {
         let v = ($($e, )*);
-        panic!("log: {:?}", std::ffi::CStr::from_ptr(v.0));
+        panic!("log: {:?}", unsafe {std::ffi::CStr::from_ptr(v.0)});
     };
 }
 pub const NLMSG_HDRLEN: libc::c_ulong = (::core::mem::size_of::<nlmsghdr>() as libc::c_ulong)

@@ -3,28 +3,30 @@ use std::os::fd::RawFd;
 use crate::types::*;
 use crate::*;
 
-pub unsafe fn die_unless_label_valid(mut _label: *const libc::c_char) {
+pub fn die_unless_label_valid(mut _label: *const libc::c_char) {
     die!(c"labeling not supported on this system".as_ptr());
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn die_oom() -> ! {
-    fputs(c"Out of memory\n".as_ptr(), stderr);
-    exit(1);
+pub extern "C" fn die_oom() -> ! {
+    unsafe {
+        fputs(c"Out of memory\n".as_ptr(), stderr);
+        exit(1);
+    }
 }
 
-pub unsafe fn fork_intermediate_child() {
-    let pid = fork();
+pub fn fork_intermediate_child() {
+    let pid = unsafe { fork() };
     if pid == -1 {
         die_with_error!(c"Can't fork for --pidns".as_ptr());
     }
     if pid != 0 {
-        exit(0);
+        unsafe { exit(0) };
     }
 }
 
-pub unsafe fn xmalloc(size: size_t) -> *mut libc::c_void {
-    let res = malloc(size);
+pub fn xmalloc(size: size_t) -> *mut libc::c_void {
+    let res = unsafe { malloc(size) };
     if res.is_null() {
         die_oom();
     }
@@ -32,12 +34,12 @@ pub unsafe fn xmalloc(size: size_t) -> *mut libc::c_void {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn die_with_error_proxy(ptr: *const libc::c_char) -> ! {
+pub extern "C" fn die_with_error_proxy(ptr: *const libc::c_char) -> ! {
     die_with_error!(ptr);
 }
 
-pub unsafe fn xcalloc(nmemb: size_t, size: size_t) -> *mut libc::c_void {
-    let res = calloc(nmemb, size);
+pub fn xcalloc(nmemb: size_t, size: size_t) -> *mut libc::c_void {
+    let res = unsafe { calloc(nmemb, size) };
     if res.is_null() {
         die_oom();
     }
@@ -45,20 +47,18 @@ pub unsafe fn xcalloc(nmemb: size_t, size: size_t) -> *mut libc::c_void {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn xrealloc(ptr: *mut libc::c_void, size: size_t) -> *mut libc::c_void {
-    let mut res = 0 as *mut libc::c_void;
+pub extern "C" fn xrealloc(ptr: *mut libc::c_void, size: size_t) -> *mut libc::c_void {
     assert!(size != 0);
-    res = realloc(ptr, size);
+    let res = unsafe { realloc(ptr, size) };
     if res.is_null() {
         die_oom();
     }
     return res;
 }
 
-pub unsafe fn xstrdup(str: *const libc::c_char) -> *mut libc::c_char {
-    let mut res = 0 as *mut libc::c_char;
+pub fn xstrdup(str: *const libc::c_char) -> *mut libc::c_char {
     assert!(!str.is_null());
-    res = strdup(str);
+    let res = unsafe { strdup(str) };
     if res.is_null() {
         die_oom();
     }
@@ -67,10 +67,9 @@ pub unsafe fn xstrdup(str: *const libc::c_char) -> *mut libc::c_char {
 
 pub unsafe fn strfreev(str_array: *mut *mut libc::c_char) {
     if !str_array.is_null() {
-        let mut i: libc::c_int = 0;
-        i = 0;
-        while !(*str_array.offset(i as isize)).is_null() {
-            free(*str_array.offset(i as isize) as *mut libc::c_void);
+        let mut i = 0;
+        while !(*str_array.add(i)).is_null() {
+            free(*str_array.add(i) as *mut libc::c_void);
             i += 1;
         }
         free(str_array as *mut libc::c_void);
@@ -89,17 +88,17 @@ pub unsafe fn has_path_prefix(
             prefix = prefix.offset(1);
         }
         if *prefix as libc::c_int == 0 {
-            return (true as i32) != 0;
+            return false;
         }
         while *prefix as libc::c_int != 0 && *prefix as libc::c_int != '/' as i32 {
             if *str as libc::c_int != *prefix as libc::c_int {
-                return (false as i32) != 0;
+                return false;
             }
             str = str.offset(1);
             prefix = prefix.offset(1);
         }
         if *str as libc::c_int != '/' as i32 && *str as libc::c_int != 0 {
-            return (false as i32) != 0;
+            return false;
         }
     }
 }
@@ -128,48 +127,43 @@ pub unsafe fn path_equal(mut path1: *const libc::c_char, mut path2: *const libc:
     }
 }
 
-pub unsafe fn has_prefix(str: *const libc::c_char, prefix: *const libc::c_char) -> bool {
-    return strncmp(str, prefix, strlen(prefix)) == 0;
+pub fn has_prefix(str: *const libc::c_char, prefix: *const libc::c_char) -> bool {
+    return unsafe { strncmp(str, prefix, strlen(prefix)) == 0 };
 }
 
-pub unsafe fn xclearenv() {
-    if clearenv() != 0 {
+pub fn xclearenv() {
+    if unsafe { clearenv() } != 0 {
         die_with_error!(c"clearenv failed".as_ptr());
     }
 }
 
-pub unsafe fn xsetenv(
-    name: *const libc::c_char,
-    value: *const libc::c_char,
-    overwrite: libc::c_int,
-) {
-    if setenv(name, value, overwrite) != 0 {
+pub fn xsetenv(name: *const libc::c_char, value: *const libc::c_char, overwrite: libc::c_int) {
+    if unsafe { setenv(name, value, overwrite) } != 0 {
         die!(c"setenv failed".as_ptr());
     }
 }
 
-pub unsafe fn xunsetenv(name: *const libc::c_char) {
-    if unsetenv(name) != 0 {
+pub fn xunsetenv(name: *const libc::c_char) {
+    if unsafe { unsetenv(name) } != 0 {
         die!(c"unsetenv failed".as_ptr());
     }
 }
 
-pub unsafe fn strconcat(s1: *const libc::c_char, s2: *const libc::c_char) -> *mut libc::c_char {
+pub fn strconcat(s1: *const libc::c_char, s2: *const libc::c_char) -> *mut libc::c_char {
     let mut len = 0 as usize;
     if !s1.is_null() {
-        len += strlen(s1);
+        len += unsafe { strlen(s1) };
     }
     if !s2.is_null() {
-        len += strlen(s2);
+        len += unsafe { strlen(s2) };
     }
-    let res = xmalloc(len + 1) as *mut libc::c_char;
+    let res = xcalloc(1, len + 1) as *mut libc::c_char;
 
-    *res = 0;
     if !s1.is_null() {
-        strcat(res, s1);
+        unsafe { strcat(res, s1) };
     }
     if !s2.is_null() {
-        strcat(res, s2);
+        unsafe { strcat(res, s2) };
     }
 
     return res;
@@ -182,25 +176,25 @@ pub unsafe fn strconcat3(
 ) -> *mut libc::c_char {
     let mut len = 0 as usize;
     if !s1.is_null() {
-        len += strlen(s1);
+        len += unsafe { strlen(s1) };
     }
     if !s2.is_null() {
-        len += strlen(s2);
+        len += unsafe { strlen(s2) };
     }
     if !s3.is_null() {
-        len += strlen(s3);
+        len += unsafe { strlen(s3) };
     }
-    let res = xmalloc(len + 1) as *mut libc::c_char;
+    let res = xcalloc(1, len + 1) as *mut libc::c_char;
 
     *res = 0;
     if !s1.is_null() {
-        strcat(res, s1);
+        unsafe { strcat(res, s1) };
     }
     if !s2.is_null() {
-        strcat(res, s2);
+        unsafe { strcat(res, s2) };
     }
     if !s3.is_null() {
-        strcat(res, s3);
+        unsafe { strcat(res, s3) };
     }
     return res;
 }
@@ -296,7 +290,7 @@ pub fn write_to_fd(
     return 0;
 }
 
-pub unsafe fn write_file_at(
+pub fn write_file_at(
     dfd: libc::c_int,
     path: *const libc::c_char,
     content: *const libc::c_char,
@@ -304,17 +298,19 @@ pub unsafe fn write_file_at(
     let mut fd: libc::c_int = 0;
     let mut res: bool = false;
     let mut errsv: libc::c_int = 0;
-    fd = retry!(openat(dfd, path, 0o2 | 0o2000000, 0));
+    fd = retry!(unsafe { openat(dfd, path, 0o2 | 0o2000000, 0) });
     if fd == -1 {
         return -1;
     }
     res = 0 != 0;
     if !content.is_null() {
-        res = write_to_fd(fd, content, strlen(content) as ssize_t) != 0;
+        res = write_to_fd(fd, content, unsafe { strlen(content) } as ssize_t) != 0;
     }
-    errsv = errno!();
-    close(fd);
-    errno!() = errsv;
+    unsafe {
+        errsv = errno!();
+        close(fd);
+        errno!() = errsv;
+    }
     return res as libc::c_int;
 }
 
@@ -421,7 +417,7 @@ pub fn load_file_data(fd: libc::c_int, size: *mut size_t) -> *mut libc::c_char {
     let mut res: ssize_t = 0;
     data_read = 0;
     data_len = 4080;
-    data = unsafe { xmalloc(data_len as size_t) as *mut libc::c_char };
+    data = xmalloc(data_len as size_t) as *mut libc::c_char;
     loop {
         if data_len == data_read + 1 {
             if data_len > SSIZE_MAX / 2 {
@@ -429,9 +425,7 @@ pub fn load_file_data(fd: libc::c_int, size: *mut size_t) -> *mut libc::c_char {
                 return std::ptr::null_mut();
             }
             data_len *= 2;
-            data = unsafe {
-                xrealloc(data as *mut libc::c_void, data_len as size_t) as *mut libc::c_char
-            };
+            data = xrealloc(data as *mut libc::c_void, data_len as size_t) as *mut libc::c_char;
         }
         loop {
             res = unsafe {
@@ -658,17 +652,12 @@ pub unsafe fn read_pid_from_socket(sockfd: libc::c_int) -> libc::c_int {
     msg.msg_iovlen = 1;
     msg.msg_control = control_buf_rcv.as_mut_ptr() as *mut libc::c_void;
     msg.msg_controllen = control_len_rcv as size_t;
-    if loop {
-        let __result = recvmsg(sockfd, &raw mut msg, 0);
-        if !(__result == -1 && errno!() == EINTR) {
-            break __result;
-        }
-    } < 0
-    {
-        die_with_error!(b"Can't read pid from socket\0" as *const u8 as *const libc::c_char);
+
+    if retry!(recvmsg(sockfd, &raw mut msg, 0)) < 0 {
+        die_with_error!(c"Can't read pid from socket".as_ptr());
     }
     if msg.msg_controllen <= 0 {
-        die!(b"Unexpected short read from pid socket\0" as *const u8 as *const libc::c_char);
+        die!(c"Unexpected short read from pid socket".as_ptr());
     }
     cmsg = if msg.msg_controllen >= ::core::mem::size_of::<cmsghdr>() {
         msg.msg_control as *mut cmsghdr
@@ -702,7 +691,7 @@ pub unsafe fn read_pid_from_socket(sockfd: libc::c_int) -> libc::c_int {
         }
         cmsg = __cmsg_nxthdr(&mut msg, cmsg);
     }
-    die!(b"No pid returned on socket\0" as *const u8 as *const libc::c_char);
+    die!(c"No pid returned on socket".as_ptr());
 }
 
 pub unsafe fn readlink_malloc(pathname: *const libc::c_char) -> *mut libc::c_char {
@@ -711,7 +700,7 @@ pub unsafe fn readlink_malloc(pathname: *const libc::c_char) -> *mut libc::c_cha
     let mut value = std::ptr::null_mut();
     loop {
         if size > SIZE_MAX.wrapping_div(2) {
-            die!(b"Symbolic link target pathname too long\0" as *const u8 as *const libc::c_char);
+            die!(c"Symbolic link target pathname too long".as_ptr());
         }
         size = (size as libc::c_ulong).wrapping_mul(2) as size_t as size_t;
         value = xrealloc(value as *mut libc::c_void, size) as *mut libc::c_char;
@@ -766,23 +755,23 @@ pub unsafe fn label_mount(
     return std::ptr::null_mut();
 }
 
-pub unsafe fn label_create_file(mut _file_label: *const libc::c_char) -> libc::c_int {
+pub fn label_create_file(mut _file_label: *const libc::c_char) -> libc::c_int {
     return 0;
 }
 
-pub unsafe fn label_exec(mut _exec_label: *const libc::c_char) -> libc::c_int {
+pub fn label_exec(mut _exec_label: *const libc::c_char) -> libc::c_int {
     return 0;
 }
 
-pub unsafe fn mount_strerror(errsv: libc::c_int) -> *const libc::c_char {
+pub fn mount_strerror(errsv: libc::c_int) -> *const libc::c_char {
     match errsv {
         ENOSPC => c"Limit exceeded (ENOSPC). (Hint: Check that /proc/sys/fs/mount-max is sufficient, typically 100000)".as_ptr(),
-        _ => strerror(errsv),
+        _ => unsafe {strerror(errsv)},
     }
 }
 
 #[no_mangle]
-unsafe extern "C" fn xadd(a: size_t, b: size_t) -> size_t {
+extern "C" fn xadd(a: size_t, b: size_t) -> size_t {
     if a > SIZE_MAX.wrapping_sub(b) {
         die_oom();
     }
