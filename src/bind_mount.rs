@@ -42,7 +42,7 @@ static mut FLAG_DATA: [MountOptionHumanReadable; 9] = [
     },
 ];
 
-unsafe fn skip_token(mut line: *mut libc::c_char, mut eat_whitespace: bool) -> *mut libc::c_char {
+unsafe fn skip_token(line: *mut libc::c_char, eat_whitespace: bool) -> *mut libc::c_char {
     let mut line: *mut u8 = line.cast();
     while *line != b' ' && *line != b'\n' {
         line = line.add(1);
@@ -53,7 +53,7 @@ unsafe fn skip_token(mut line: *mut libc::c_char, mut eat_whitespace: bool) -> *
     return line.cast();
 }
 
-unsafe fn unescape_inline(mut escaped: *mut libc::c_char) -> *mut libc::c_char {
+unsafe fn unescape_inline(escaped: *mut libc::c_char) -> *mut libc::c_char {
     let mut unescaped = std::ptr::null_mut();
     let mut res: *mut u8 = std::ptr::null_mut();
     let mut end: *const u8 = std::ptr::null();
@@ -83,7 +83,7 @@ unsafe fn unescape_inline(mut escaped: *mut libc::c_char) -> *mut libc::c_char {
 
 unsafe fn match_token(
     mut token: *const libc::c_char,
-    mut token_end: *const libc::c_char,
+    token_end: *const libc::c_char,
     mut str: *const libc::c_char,
 ) -> bool {
     while token != token_end && *token == *str {
@@ -96,7 +96,7 @@ unsafe fn match_token(
     return false;
 }
 
-unsafe fn decode_mountoptions(mut options: *const libc::c_char) -> libc::c_ulong {
+unsafe fn decode_mountoptions(options: *const libc::c_char) -> libc::c_ulong {
     let mut token = std::ptr::null();
     let mut end_token = std::ptr::null();
     let mut i: usize = 0;
@@ -128,7 +128,7 @@ unsafe fn decode_mountoptions(mut options: *const libc::c_char) -> libc::c_ulong
     return flags;
 }
 
-unsafe fn count_lines(mut data: *const libc::c_char) -> libc::c_uint {
+unsafe fn count_lines(data: *const libc::c_char) -> libc::c_uint {
     let mut count: libc::c_uint = 0;
     let mut p: *const u8 = data.cast();
     while *p as libc::c_int != 0 {
@@ -143,7 +143,7 @@ unsafe fn count_lines(mut data: *const libc::c_char) -> libc::c_uint {
     return count;
 }
 
-fn count_mounts(mut line: &mut MountInfoLine) -> libc::c_int {
+fn count_mounts(line: &mut MountInfoLine) -> libc::c_int {
     let mut res = if !line.covered { 1 } else { 0 };
     if line.first_child.is_null() {
         return res;
@@ -162,7 +162,7 @@ fn count_mounts(mut line: &mut MountInfoLine) -> libc::c_int {
     return res;
 }
 
-unsafe fn collect_mounts(mut info: *mut MountInfo, mut line: *mut MountInfoLine) -> *mut MountInfo {
+unsafe fn collect_mounts(mut info: *mut MountInfo, line: *mut MountInfoLine) -> *mut MountInfo {
     let mut child = std::ptr::null_mut();
     if !(*line).covered {
         (*info).mountpoint = xstrdup((*line).mountpoint);
@@ -178,8 +178,8 @@ unsafe fn collect_mounts(mut info: *mut MountInfo, mut line: *mut MountInfoLine)
 }
 
 unsafe fn parse_mountinfo(
-    mut proc_fd: libc::c_int,
-    mut root_mount: *const libc::c_char,
+    proc_fd: libc::c_int,
+    root_mount: *const libc::c_char,
 ) -> MountTab {
     let mut mountinfo = std::ptr::null_mut() as *mut libc::c_char;
     let mut lines = std::ptr::null_mut() as *mut MountInfoLine;
@@ -287,8 +287,8 @@ unsafe fn parse_mountinfo(
     }
     i = 0;
     while i < n_lines {
-        let mut this: *mut MountInfoLine = &mut *lines.offset(i as isize) as *mut MountInfoLine;
-        let mut parent = *by_id.offset((*this).parent_id as isize);
+        let this: *mut MountInfoLine = &mut *lines.offset(i as isize) as *mut MountInfoLine;
+        let parent = *by_id.offset((*this).parent_id as isize);
         let mut to_sibling = 0 as *mut *mut MountInfoLine;
         let mut sibling = 0 as *mut MountInfoLine;
         let mut covered = false;
@@ -332,15 +332,15 @@ unsafe fn parse_mountinfo(
 }
 
 pub unsafe fn bind_mount(
-    mut proc_fd: libc::c_int,
-    mut src: *const libc::c_char,
-    mut dest: *const libc::c_char,
-    mut options: bind_option_t,
-    mut failing_path: *mut *mut libc::c_char,
+    proc_fd: libc::c_int,
+    src: *const libc::c_char,
+    dest: *const libc::c_char,
+    options: bind_option_t,
+    failing_path: *mut *mut libc::c_char,
 ) -> bind_mount_result {
-    let mut readonly = options as libc::c_uint & BIND_READONLY as libc::c_int as libc::c_uint != 0;
-    let mut devices = options as libc::c_uint & BIND_DEVICES as libc::c_int as libc::c_uint != 0;
-    let mut recursive =
+    let readonly = options as libc::c_uint & BIND_READONLY as libc::c_int as libc::c_uint != 0;
+    let devices = options as libc::c_uint & BIND_DEVICES as libc::c_int as libc::c_uint != 0;
+    let recursive =
         options as libc::c_uint & BIND_RECURSIVE as libc::c_int as libc::c_uint != 0;
     let mut current_flags: libc::c_ulong = 0;
     let mut new_flags: libc::c_ulong = 0;
@@ -495,9 +495,9 @@ pub unsafe fn bind_mount(
 }
 
 unsafe fn bind_mount_result_to_string(
-    mut res: bind_mount_result,
-    mut failing_path: *const libc::c_char,
-    mut want_errno_p: *mut bool,
+    res: bind_mount_result,
+    failing_path: *const libc::c_char,
+    want_errno_p: *mut bool,
 ) -> *mut libc::c_char {
     let mut string = std::ptr::null_mut() as *mut libc::c_char;
     let mut want_errno = true;

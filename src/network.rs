@@ -5,12 +5,12 @@ use ::libc;
 use std::ptr::addr_of_mut;
 
 unsafe fn add_rta(
-    mut header: *mut nlmsghdr,
-    mut type_0: libc::c_int,
-    mut size: size_t,
+    header: *mut nlmsghdr,
+    type_0: libc::c_int,
+    size: size_t,
 ) -> *mut libc::c_void {
     let mut rta = 0 as *mut rtattr;
-    let mut rta_size = (::core::mem::size_of::<rtattr>() as u32)
+    let rta_size = (::core::mem::size_of::<rtattr>() as u32)
         .wrapping_add(RTA_ALIGNTO as u32)
         .wrapping_sub(1)
         & !RTA_ALIGNTO.wrapping_sub(1).wrapping_add(size as u32);
@@ -36,7 +36,7 @@ unsafe fn add_rta(
     ) as *mut libc::c_void;
 }
 
-unsafe fn rtnl_send_request(mut rtnl_fd: libc::c_int, mut header: *mut nlmsghdr) -> libc::c_int {
+unsafe fn rtnl_send_request(rtnl_fd: libc::c_int, header: *mut nlmsghdr) -> libc::c_int {
     let mut dst_addr: MaybeUninit<sockaddr_nl> = MaybeUninit::zeroed();
     *addr_of_mut!((*dst_addr.as_mut_ptr()).nl_family) = libc::AF_NETLINK as _;
     let mut sent: ssize_t = 0;
@@ -61,7 +61,7 @@ unsafe fn rtnl_send_request(mut rtnl_fd: libc::c_int, mut header: *mut nlmsghdr)
     return 0;
 }
 
-unsafe fn rtnl_read_reply(mut rtnl_fd: libc::c_int, mut seq_nr: libc::c_uint) -> libc::c_int {
+unsafe fn rtnl_read_reply(rtnl_fd: libc::c_int, seq_nr: libc::c_uint) -> libc::c_int {
     let mut buffer: [libc::c_char; 1024] = [0; 1024];
     let mut received: ssize_t = 0;
     let mut rheader = 0 as *mut nlmsghdr;
@@ -89,7 +89,7 @@ unsafe fn rtnl_read_reply(mut rtnl_fd: libc::c_int, mut seq_nr: libc::c_uint) ->
                 return -1;
             }
             if (*rheader).nlmsg_type as libc::c_int == libc::NLMSG_ERROR {
-                let mut err = (rheader as *mut libc::c_char).offset(NLMSG_HDRLEN as _)
+                let err = (rheader as *mut libc::c_char).offset(NLMSG_HDRLEN as _)
                     as *mut libc::c_void as *mut u32;
                 if *err == 0 {
                     return 0;
@@ -113,7 +113,7 @@ unsafe fn rtnl_read_reply(mut rtnl_fd: libc::c_int, mut seq_nr: libc::c_uint) ->
     }
 }
 
-unsafe fn rtnl_do_request(mut rtnl_fd: libc::c_int, mut header: *mut nlmsghdr) -> libc::c_int {
+unsafe fn rtnl_do_request(rtnl_fd: libc::c_int, header: *mut nlmsghdr) -> libc::c_int {
     if rtnl_send_request(rtnl_fd, header) != 0 {
         return -1;
     }
@@ -124,13 +124,13 @@ unsafe fn rtnl_do_request(mut rtnl_fd: libc::c_int, mut header: *mut nlmsghdr) -
 }
 
 unsafe fn rtnl_setup_request(
-    mut buffer: *mut libc::c_char,
-    mut type_0: libc::c_int,
-    mut flags: libc::c_int,
-    mut size: size_t,
+    buffer: *mut libc::c_char,
+    type_0: libc::c_int,
+    flags: libc::c_int,
+    size: size_t,
 ) -> *mut nlmsghdr {
     let mut header = 0 as *mut nlmsghdr;
-    let mut len = size.wrapping_add(NLMSG_HDRLEN as _);
+    let len = size.wrapping_add(NLMSG_HDRLEN as _);
     static mut counter: u32 = 0;
     memset(buffer as *mut libc::c_void, 0, len);
     header = buffer as *mut nlmsghdr;

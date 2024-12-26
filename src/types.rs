@@ -402,8 +402,8 @@ pub struct StringBuilder {
 }
 
 #[inline]
-pub unsafe fn steal_pointer(mut pp: *mut libc::c_void) -> *mut libc::c_void {
-    let mut ptr = pp as *mut *mut libc::c_void;
+pub unsafe fn steal_pointer(pp: *mut libc::c_void) -> *mut libc::c_void {
+    let ptr = pp as *mut *mut libc::c_void;
     let mut ref_0 = 0 as *mut libc::c_void;
     ref_0 = *ptr;
     *ptr = std::ptr::null_mut();
