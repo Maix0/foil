@@ -43,17 +43,14 @@ void strappendf(StringBuilder *dest, const char *fmt, ...) {
   dest->offset = new_offset;
 }
 
-char *
-xasprintf (const char *format,
-           ...)
-{
+char *xasprintf(const char *format, ...) {
   char *buffer = NULL;
   va_list args;
 
-  va_start (args, format);
-  if (vasprintf (&buffer, format, args) == -1)
+  va_start(args, format);
+  if (vasprintf(&buffer, format, args) == -1)
     die_oom();
-  va_end (args);
+  va_end(args);
 
   return buffer;
 }

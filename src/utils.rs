@@ -11,16 +11,16 @@ pub unsafe extern "C" fn die_oom() -> ! {
         b"Out of memory\n\0" as *const u8 as *const libc::c_char,
         stderr,
     );
-    exit(1 as libc::c_int);
+    exit(1);
 }
 
 pub unsafe fn fork_intermediate_child() {
     let mut pid = fork();
-    if pid == -(1 as libc::c_int) {
+    if pid == -(1) {
         die_with_error!(b"Can't fork for --pidns\0" as *const u8 as *const libc::c_char);
     }
-    if pid != 0 as libc::c_int {
-        exit(0 as libc::c_int);
+    if pid != 0 {
+        exit(0);
     }
 }
 
@@ -72,7 +72,7 @@ pub unsafe fn xstrdup(mut str: *const libc::c_char) -> *mut libc::c_char {
 pub unsafe fn strfreev(mut str_array: *mut *mut libc::c_char) {
     if !str_array.is_null() {
         let mut i: libc::c_int = 0;
-        i = 0 as libc::c_int;
+        i = 0;
         while !(*str_array.offset(i as isize)).is_null() {
             free(*str_array.offset(i as isize) as *mut libc::c_void);
             i += 1;
@@ -92,17 +92,17 @@ pub unsafe fn has_path_prefix(
         while *prefix as libc::c_int == '/' as i32 {
             prefix = prefix.offset(1);
         }
-        if *prefix as libc::c_int == 0 as libc::c_int {
+        if *prefix as libc::c_int == 0 {
             return (true as i32) != 0;
         }
-        while *prefix as libc::c_int != 0 as libc::c_int && *prefix as libc::c_int != '/' as i32 {
+        while *prefix as libc::c_int != 0 && *prefix as libc::c_int != '/' as i32 {
             if *str as libc::c_int != *prefix as libc::c_int {
                 return (false as i32) != 0;
             }
             str = str.offset(1);
             prefix = prefix.offset(1);
         }
-        if *str as libc::c_int != '/' as i32 && *str as libc::c_int != 0 as libc::c_int {
+        if *str as libc::c_int != '/' as i32 && *str as libc::c_int != 0 {
             return (false as i32) != 0;
         }
     }
@@ -110,35 +110,34 @@ pub unsafe fn has_path_prefix(
 
 pub unsafe fn path_equal(mut path1: *const libc::c_char, mut path2: *const libc::c_char) -> bool {
     loop {
-        while *path1 as libc::c_int == '/' as i32 {
+        while *path1 == '/' as i8 {
             path1 = path1.offset(1);
         }
-        while *path2 as libc::c_int == '/' as i32 {
+        while *path2 == '/' as i8 {
             path2 = path2.offset(1);
         }
-        if *path1 as libc::c_int == 0 as libc::c_int || *path2 as libc::c_int == 0 as libc::c_int {
-            return *path1 as libc::c_int == 0 as libc::c_int
-                && *path2 as libc::c_int == 0 as libc::c_int;
+        if *path1 == 0 || *path2 == 0 {
+            return *path1 == 0 && *path2 == 0;
         }
-        while *path1 as libc::c_int != 0 as libc::c_int && *path1 as libc::c_int != '/' as i32 {
-            if *path1 as libc::c_int != *path2 as libc::c_int {
+        while *path1 != 0 && *path1 != '/' as i8 {
+            if *path1 != *path2 {
                 return (false as i32) != 0;
             }
             path1 = path1.offset(1);
             path2 = path2.offset(1);
         }
-        if *path2 as libc::c_int != '/' as i32 && *path2 as libc::c_int != 0 as libc::c_int {
+        if *path2 != '/' as i8 && *path2 != 0 {
             return (false as i32) != 0;
         }
     }
 }
 
 pub unsafe fn has_prefix(mut str: *const libc::c_char, mut prefix: *const libc::c_char) -> bool {
-    return strncmp(str, prefix, strlen(prefix)) == 0 as libc::c_int;
+    return strncmp(str, prefix, strlen(prefix)) == 0;
 }
 
 pub unsafe fn xclearenv() {
-    if clearenv() != 0 as libc::c_int {
+    if clearenv() != 0 {
         die_with_error!(b"clearenv failed\0" as *const u8 as *const libc::c_char);
     }
 }
@@ -163,7 +162,7 @@ pub unsafe fn strconcat(
     mut s1: *const libc::c_char,
     mut s2: *const libc::c_char,
 ) -> *mut libc::c_char {
-    let mut len = 0 as libc::c_int as size_t;
+    let mut len = 0 as size_t;
     let mut res = 0 as *mut libc::c_char;
     if !s1.is_null() {
         len = (len).wrapping_add(strlen(s1)) as size_t as size_t;
@@ -172,7 +171,7 @@ pub unsafe fn strconcat(
         len = (len).wrapping_add(strlen(s2)) as size_t as size_t;
     }
     res = xmalloc(len.wrapping_add(1)) as *mut libc::c_char;
-    *res = 0 as libc::c_int as libc::c_char;
+    *res = 0 as libc::c_char;
     if !s1.is_null() {
         strcat(res, s1);
     }
@@ -187,7 +186,7 @@ pub unsafe fn strconcat3(
     mut s2: *const libc::c_char,
     mut s3: *const libc::c_char,
 ) -> *mut libc::c_char {
-    let mut len = 0 as libc::c_int as size_t;
+    let mut len = 0 as size_t;
     let mut res = 0 as *mut libc::c_char;
     if !s1.is_null() {
         len = (len).wrapping_add(strlen(s1));
@@ -199,7 +198,7 @@ pub unsafe fn strconcat3(
         len = (len).wrapping_add(strlen(s3));
     }
     res = xmalloc(len.wrapping_add(1)) as *mut libc::c_char;
-    *res = 0 as libc::c_int as libc::c_char;
+    *res = 0 as libc::c_char;
     if !s1.is_null() {
         strcat(res, s1);
     }
@@ -220,7 +219,7 @@ pub unsafe fn fdwalk(
     let mut open_max: libc::c_int = 0;
     let mut fd: libc::c_int = 0;
     let mut dfd: libc::c_int = 0;
-    let mut res = 0 as libc::c_int;
+    let mut res = 0;
     let mut d = 0 as *mut DIR;
     dfd = ({
         let mut __result: libc::c_long = 0;
@@ -228,18 +227,15 @@ pub unsafe fn fdwalk(
             __result = openat(
                 proc_fd,
                 b"self/fd\0" as *const u8 as *const libc::c_char,
-                0o200000 as libc::c_int
-                    | 0o4000 as libc::c_int
-                    | 0o2000000 as libc::c_int
-                    | 0o400 as libc::c_int,
+                0o200000 | 0o4000 | 0o2000000 | 0o400,
             ) as libc::c_long;
-            if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
+            if !(__result == -(1) && errno!() == EINTR) {
                 break;
             }
         }
         __result
     }) as libc::c_int;
-    if dfd == -(1 as libc::c_int) {
+    if dfd == -(1) {
         return res;
     }
     d = fdopendir(dfd);
@@ -252,12 +248,12 @@ pub unsafe fn fdwalk(
             }
             let mut l: libc::c_long = 0;
             let mut e = std::ptr::null_mut();
-            if (*de).d_name[0 as libc::c_int as usize] as libc::c_int == '.' as i32 {
+            if (*de).d_name[0 as usize] as libc::c_int == '.' as i32 {
                 continue;
             }
-            errno!() = 0 as libc::c_int;
-            l = strtol(((*de).d_name).as_mut_ptr(), &mut e, 10 as libc::c_int);
-            if errno!() != 0 as libc::c_int || e.is_null() || *e as libc::c_int != 0 {
+            errno!() = 0;
+            l = strtol(((*de).d_name).as_mut_ptr(), &mut e, 10);
+            if errno!() != 0 || e.is_null() || *e as libc::c_int != 0 {
                 continue;
             }
             fd = l as libc::c_int;
@@ -268,7 +264,7 @@ pub unsafe fn fdwalk(
                 continue;
             }
             res = cb.expect("non-null function pointer")(data, fd);
-            if res != 0 as libc::c_int {
+            if res != 0 {
                 break;
             }
         }
@@ -276,10 +272,10 @@ pub unsafe fn fdwalk(
         return res;
     }
     open_max = sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
-    fd = 0 as libc::c_int;
+    fd = 0;
     while fd < open_max {
         res = cb.expect("non-null function pointer")(data, fd);
-        if res != 0 as libc::c_int {
+        if res != 0 {
             break;
         }
         fd += 1;
@@ -302,12 +298,12 @@ pub unsafe fn write_to_fd(
             if res == 0 {
                 errno!() = ENOSPC;
             }
-            return -(1 as libc::c_int);
+            return -(1);
         }
         len -= res;
         content = content.offset(res as isize);
     }
-    return 0 as libc::c_int;
+    return 0;
 }
 
 pub unsafe fn write_file_at(
@@ -319,13 +315,8 @@ pub unsafe fn write_file_at(
     let mut res: bool = false;
     let mut errsv: libc::c_int = 0;
     fd = loop {
-        let __result = openat(
-            dfd,
-            path,
-            0o2 as libc::c_int | 0o2000000 as libc::c_int,
-            0 as libc::c_int,
-        ) as libc::c_long;
-        if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
+        let __result = openat(dfd, path, 0o2 | 0o2000000, 0) as libc::c_long;
+        if !(__result == -(1) && errno!() == EINTR) {
             break __result;
         }
     } as libc::c_int;
@@ -352,14 +343,14 @@ pub unsafe fn create_file(
     let mut errsv: libc::c_int = 0;
     fd = loop {
         let __result = creat(path, mode) as libc::c_long;
-        if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
+        if !(__result == -(1) && errno!() == EINTR) {
             break __result;
         }
     } as libc::c_int;
-    if fd == -(1 as libc::c_int) {
-        return -(1 as libc::c_int);
+    if fd == -(1) {
+        return -(1);
     }
-    res = 0 as libc::c_int;
+    res = 0;
     if !content.is_null() {
         res = write_to_fd(fd, content, strlen(content) as ssize_t);
     }
@@ -373,18 +364,18 @@ pub unsafe fn ensure_file(mut path: *const libc::c_char, mut mode: mode_t) -> li
     let mut buf: MaybeUninit<libc::stat> = MaybeUninit::uninit();
     if stat(path, buf.as_mut_ptr()) == 0 && {
         let buf = buf.assume_init();
-        !(buf.st_mode & S_IFMT as libc::c_uint == 0o40000 as libc::c_int as libc::c_uint)
-            && !(buf.st_mode & S_IFMT as libc::c_uint == 0o120000 as libc::c_int as libc::c_uint)
+        !(buf.st_mode & S_IFMT as libc::c_uint == 0o40000)
+            && !(buf.st_mode & S_IFMT as libc::c_uint == 0o120000)
     } {
         return 0;
     }
-    if create_file(path, mode, std::ptr::null_mut()) != 0 as libc::c_int && errno!() != EEXIST {
+    if create_file(path, mode, std::ptr::null_mut()) != 0 && errno!() != EEXIST {
         return -1;
     }
     return 0;
 }
 
-pub const BUFSIZE: libc::c_int = 8192 as libc::c_int;
+pub const BUFSIZE: libc::c_int = 8192;
 
 pub unsafe fn copy_file_data(mut sfd: libc::c_int, mut dfd: libc::c_int) -> libc::c_int {
     let mut buffer: [libc::c_char; 8192] = [0; 8192];
@@ -399,17 +390,17 @@ pub unsafe fn copy_file_data(mut sfd: libc::c_int, mut dfd: libc::c_int) -> libc
             if errno!() == EINTR {
                 continue;
             }
-            return -(1 as libc::c_int);
+            return -(1);
         } else {
             if bytes_read == 0 {
                 break;
             }
-            if write_to_fd(dfd, buffer.as_mut_ptr(), bytes_read) != 0 as libc::c_int {
-                return -(1 as libc::c_int);
+            if write_to_fd(dfd, buffer.as_mut_ptr(), bytes_read) != 0 {
+                return -(1);
             }
         }
     }
-    return 0 as libc::c_int;
+    return 0;
 }
 
 pub unsafe fn copy_file(
@@ -427,24 +418,24 @@ pub unsafe fn copy_file(
             break __result;
         }
     } as libc::c_int;
-    if sfd == -(1 as libc::c_int) {
-        return -(1 as libc::c_int);
+    if sfd == -(1) {
+        return -(1);
     }
     dfd = ({
         let mut __result: libc::c_long = 0;
         loop {
             __result = creat(dst_path, mode) as libc::c_long;
-            if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
+            if !(__result == -(1) && errno!() == EINTR) {
                 break;
             }
         }
         __result
     }) as libc::c_int;
-    if dfd == -(1 as libc::c_int) {
+    if dfd == -(1) {
         errsv = errno!();
         close(sfd);
         errno!() = errsv;
-        return -(1 as libc::c_int);
+        return -(1);
     }
     res = copy_file_data(sfd, dfd);
     errsv = errno!();
@@ -459,8 +450,8 @@ pub unsafe fn load_file_data(mut fd: libc::c_int, mut size: *mut size_t) -> *mut
     let mut data_read: ssize_t = 0;
     let mut data_len: ssize_t = 0;
     let mut res: ssize_t = 0;
-    data_read = 0 as libc::c_int as ssize_t;
-    data_len = 4080 as libc::c_int as ssize_t;
+    data_read = 0 as ssize_t;
+    data_len = 4080 as ssize_t;
     data = xmalloc(data_len as size_t) as *mut libc::c_char;
     loop {
         if data_len == data_read + 1 {
@@ -489,7 +480,7 @@ pub unsafe fn load_file_data(mut fd: libc::c_int, mut size: *mut size_t) -> *mut
             break;
         }
     }
-    *data.offset(data_read as isize) = 0 as libc::c_int as libc::c_char;
+    *data.offset(data_read as isize) = 0 as libc::c_char;
     if !size.is_null() {
         *size = data_read as size_t;
     }
@@ -508,13 +499,12 @@ pub unsafe fn load_file_at(
     let mut data = 0 as *mut libc::c_char;
     let mut errsv: libc::c_int = 0;
     fd = loop {
-        let __result =
-            openat(dfd, path, 0o2000000 as libc::c_int | 0 as libc::c_int) as libc::c_long;
-        if !(__result == -(1 as libc::c_long) && errno!() == EINTR) {
+        let __result = openat(dfd, path, 0o2000000 | 0) as libc::c_long;
+        if !(__result == -(1) && errno!() == EINTR) {
             break __result;
         }
     } as libc::c_int;
-    if fd == -(1 as libc::c_int) {
+    if fd == -(1) {
         return std::ptr::null_mut();
     }
     data = load_file_data(fd, std::ptr::null_mut());
@@ -526,8 +516,8 @@ pub unsafe fn load_file_at(
 
 pub unsafe fn get_file_mode(mut pathname: *const libc::c_char) -> libc::c_int {
     let mut buf: std::mem::MaybeUninit<libc::stat> = MaybeUninit::uninit();
-    if stat(pathname, buf.as_mut_ptr()) != 0 as libc::c_int {
-        return -(1 as libc::c_int);
+    if stat(pathname, buf.as_mut_ptr()) != 0 {
+        return -(1);
     }
     let buf = buf.assume_init();
     return (buf.st_mode & S_IFMT as libc::c_uint) as libc::c_int;
@@ -537,13 +527,13 @@ pub unsafe fn ensure_dir(mut path: *const libc::c_char, mut mode: mode_t) -> lib
     let mut buf: std::mem::MaybeUninit<libc::stat> = MaybeUninit::uninit();
     if stat(path, buf.as_mut_ptr()) == 0 {
         let buf = buf.assume_init();
-        if !(buf.st_mode & S_IFMT as libc::c_uint == 0o40000 as libc::c_int as libc::c_uint) {
+        if !(buf.st_mode & S_IFMT as libc::c_uint == 0o40000) {
             errno!() = ENOTDIR;
             return -(1);
         }
         return 0;
     }
-    if mkdir(path, mode) == -(1 as libc::c_int) && errno!() != EEXIST {
+    if mkdir(path, mode) == -(1) && errno!() != EEXIST {
         return -(1);
     }
     return 0;
@@ -558,7 +548,7 @@ pub unsafe fn mkdir_with_parents(
     let mut p = 0 as *mut libc::c_char;
     if pathname.is_null() || *pathname as libc::c_int == '\0' as i32 {
         errno!() = EINVAL;
-        return -(1 as libc::c_int);
+        return -(1);
     }
     fn_0 = xstrdup(pathname);
     p = fn_0;
@@ -572,18 +562,18 @@ pub unsafe fn mkdir_with_parents(
         if *p == 0 {
             p = std::ptr::null_mut();
         } else {
-            *p = '\0' as i32 as libc::c_char;
+            *p = '\0' as i8;
         }
         if !create_last && p.is_null() {
             break;
         }
-        if ensure_dir(fn_0, mode) != 0 as libc::c_int {
-            return -(1 as libc::c_int);
+        if ensure_dir(fn_0, mode) != 0 {
+            return -(1);
         }
         if !p.is_null() {
             let fresh0 = p;
             p = p.offset(1);
-            *fresh0 = '/' as i32 as libc::c_char;
+            *fresh0 = '/' as i8;
             while *p as libc::c_int != 0 && *p as libc::c_int == '/' as i32 {
                 p = p.offset(1);
             }
@@ -592,11 +582,11 @@ pub unsafe fn mkdir_with_parents(
             break;
         }
     }
-    return 0 as libc::c_int;
+    return 0;
 }
 
 pub unsafe fn send_pid_on_socket(mut sockfd: libc::c_int) {
-    let mut buf: [libc::c_char; 1] = [0 as libc::c_int as libc::c_char];
+    let mut buf: [libc::c_char; 1] = [0 as libc::c_char];
     let mut msg: msghdr = std::mem::zeroed();
     let mut iov = iovec {
         iov_base: buf.as_mut_ptr() as *mut libc::c_void,
@@ -605,22 +595,20 @@ pub unsafe fn send_pid_on_socket(mut sockfd: libc::c_int) {
 
     let control_len_snd = ((::core::mem::size_of::<ucred>() as libc::c_ulong)
         .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
-        .wrapping_sub(1 as libc::c_int as libc::c_ulong)
-        & !(::core::mem::size_of::<size_t>() as libc::c_ulong)
-            .wrapping_sub(1 as libc::c_int as libc::c_ulong))
+        .wrapping_sub(1 as libc::c_ulong)
+        & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1 as libc::c_ulong))
     .wrapping_add(
         (::core::mem::size_of::<cmsghdr>() as libc::c_ulong)
             .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
-            .wrapping_sub(1 as libc::c_int as libc::c_ulong)
-            & !(::core::mem::size_of::<size_t>() as libc::c_ulong)
-                .wrapping_sub(1 as libc::c_int as libc::c_ulong),
+            .wrapping_sub(1 as libc::c_ulong)
+            & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1 as libc::c_ulong),
     ) as ssize_t;
     let vla = control_len_snd as usize;
     let mut control_buf_snd: Vec<libc::c_char> = ::std::vec::from_elem(0, vla);
     let mut cmsg = std::ptr::null_mut() as *mut cmsghdr;
     let mut cred: ucred = std::mem::zeroed();
     msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1 as libc::c_int as size_t;
+    msg.msg_iovlen = 1 as size_t;
     msg.msg_control = control_buf_snd.as_mut_ptr() as *mut libc::c_void;
     msg.msg_controllen = control_len_snd as size_t;
     cmsg = if msg.msg_controllen >= ::core::mem::size_of::<cmsghdr>() {
@@ -655,32 +643,32 @@ pub unsafe fn send_pid_on_socket(mut sockfd: libc::c_int) {
 }
 
 pub unsafe fn create_pid_socketpair(mut sockets: *mut libc::c_int) {
-    let mut enable = 1 as libc::c_int;
+    let mut enable = 1;
     if socketpair(
         libc::AF_UNIX,
         libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
-        0 as libc::c_int,
+        0,
         sockets,
-    ) != 0 as libc::c_int
+    ) != 0
     {
         die_with_error!(
             b"Can't create intermediate pids socket\0" as *const u8 as *const libc::c_char,
         );
     }
     if setsockopt(
-        *sockets.offset(0 as libc::c_int as isize),
+        *sockets.offset(0 as isize),
         libc::SOL_SOCKET,
         libc::SO_PASSCRED,
         &mut enable as *mut libc::c_int as *const libc::c_void,
         ::core::mem::size_of::<libc::c_int>() as libc::c_ulong as socklen_t,
-    ) < 0 as libc::c_int
+    ) < 0
     {
         die_with_error!(b"Can't set SO_PASSCRED\0" as *const u8 as *const libc::c_char);
     }
 }
 
 pub unsafe fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::c_int {
-    let mut recv_buf: [libc::c_char; 1] = [0 as libc::c_int as libc::c_char];
+    let mut recv_buf: [libc::c_char; 1] = [0 as libc::c_char];
     let mut msg: msghdr = std::mem::zeroed();
     let mut iov = iovec {
         iov_base: recv_buf.as_mut_ptr() as *mut libc::c_void,
@@ -688,21 +676,19 @@ pub unsafe fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::c_int {
     };
     let control_len_rcv = ((::core::mem::size_of::<ucred>() as libc::c_ulong)
         .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
-        .wrapping_sub(1 as libc::c_int as libc::c_ulong)
-        & !(::core::mem::size_of::<size_t>() as libc::c_ulong)
-            .wrapping_sub(1 as libc::c_int as libc::c_ulong))
+        .wrapping_sub(1 as libc::c_ulong)
+        & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1 as libc::c_ulong))
     .wrapping_add(
         (::core::mem::size_of::<cmsghdr>() as libc::c_ulong)
             .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
-            .wrapping_sub(1 as libc::c_int as libc::c_ulong)
-            & !(::core::mem::size_of::<size_t>() as libc::c_ulong)
-                .wrapping_sub(1 as libc::c_int as libc::c_ulong),
+            .wrapping_sub(1 as libc::c_ulong)
+            & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1 as libc::c_ulong),
     ) as ssize_t;
     let vla = control_len_rcv as usize;
     let mut control_buf_rcv: Vec<libc::c_char> = ::std::vec::from_elem(0, vla);
     let mut cmsg = std::ptr::null_mut();
     msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1 as libc::c_int as size_t;
+    msg.msg_iovlen = 1 as size_t;
     msg.msg_control = control_buf_rcv.as_mut_ptr() as *mut libc::c_void;
     msg.msg_controllen = control_len_rcv as size_t;
     if loop {
@@ -760,8 +746,7 @@ pub unsafe fn readlink_malloc(mut pathname: *const libc::c_char) -> *mut libc::c
         if size > SIZE_MAX.wrapping_div(2) {
             die!(b"Symbolic link target pathname too long\0" as *const u8 as *const libc::c_char);
         }
-        size = (size as libc::c_ulong).wrapping_mul(2 as libc::c_int as libc::c_ulong) as size_t
-            as size_t;
+        size = (size as libc::c_ulong).wrapping_mul(2 as libc::c_ulong) as size_t as size_t;
         value = xrealloc(value as *mut libc::c_void, size) as *mut libc::c_char;
         n = readlink(pathname, value, size.wrapping_sub(1));
         if n < 0 {
@@ -771,8 +756,8 @@ pub unsafe fn readlink_malloc(mut pathname: *const libc::c_char) -> *mut libc::c
             break;
         }
     }
-    *value.offset(n as isize) = 0 as libc::c_int as libc::c_char;
-    return (if 0 as libc::c_int != 0 {
+    *value.offset(n as isize) = 0 as libc::c_char;
+    return (if 0 != 0 {
         value as *mut libc::c_void
     } else {
         steal_pointer(&mut value as *mut *mut libc::c_char as *mut libc::c_void)
@@ -818,11 +803,11 @@ pub unsafe fn label_mount(
 }
 
 pub unsafe fn label_create_file(mut _file_label: *const libc::c_char) -> libc::c_int {
-    return 0 as libc::c_int;
+    return 0;
 }
 
 pub unsafe fn label_exec(mut _exec_label: *const libc::c_char) -> libc::c_int {
-    return 0 as libc::c_int;
+    return 0;
 }
 
 pub unsafe fn mount_strerror(mut errsv: libc::c_int) -> *const libc::c_char {
@@ -855,10 +840,7 @@ pub unsafe fn strappend(mut dest: *mut StringBuilder, mut src: *const libc::c_ch
     let mut len = strlen(src);
     let mut new_offset = xadd((*dest).offset, len);
     if new_offset >= (*dest).size {
-        (*dest).size = xmul(
-            xadd(new_offset, 1 as libc::c_int as size_t),
-            2 as libc::c_int as size_t,
-        );
+        (*dest).size = xmul(xadd(new_offset, 1 as size_t), 2 as size_t);
         (*dest).str_0 =
             xrealloc((*dest).str_0 as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
     }
@@ -880,21 +862,21 @@ pub unsafe fn strappend_escape_for_mount_options(
             (*dest).size = if 64 > xmul((*dest).size, 2) {
                 64
             } else {
-                xmul((*dest).size, 2 as libc::c_int as size_t)
+                xmul((*dest).size, 2 as size_t)
             };
             (*dest).str_0 =
                 xrealloc((*dest).str_0 as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
         }
         match *src as libc::c_int {
             0 => {
-                *((*dest).str_0).offset((*dest).offset as isize) = '\0' as i32 as libc::c_char;
+                *((*dest).str_0).offset((*dest).offset as isize) = '\0' as i8;
                 return;
             }
             92 | 44 | 58 => {
                 if unescaped {
                     let fresh1 = (*dest).offset;
                     (*dest).offset = ((*dest).offset).wrapping_add(1);
-                    *((*dest).str_0).offset(fresh1 as isize) = '\\' as i32 as libc::c_char;
+                    *((*dest).str_0).offset(fresh1 as isize) = '\\' as i8;
                     unescaped = false;
                     continue;
                 }

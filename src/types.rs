@@ -12,13 +12,13 @@ pub const BIND_MOUNT_ERROR_REOPEN_DEST: bind_mount_result = 3;
 pub const BIND_MOUNT_SUCCESS: bind_mount_result = 0;
 pub const BIND_READONLY: bind_option_t = 1;
 pub const BIND_RECURSIVE: bind_option_t = 8;
-pub const EACCES: libc::c_int = 13 as libc::c_int;
-pub const EEXIST: libc::c_int = 17 as libc::c_int;
-pub const EFBIG: libc::c_int = 27 as libc::c_int;
-pub const EINTR: libc::c_int = 4 as libc::c_int;
-pub const EINVAL: libc::c_int = 22 as libc::c_int;
+pub const EACCES: libc::c_int = 13;
+pub const EEXIST: libc::c_int = 17;
+pub const EFBIG: libc::c_int = 27;
+pub const EINTR: libc::c_int = 4;
+pub const EINVAL: libc::c_int = 22;
 pub const ENOSPC: libc::c_int = 28;
-pub const ENOTDIR: libc::c_int = 20 as libc::c_int;
+pub const ENOTDIR: libc::c_int = 20;
 pub const IFA_ADDRESS: libc::c_uint = 1;
 pub const IFA_ANYCAST: libc::c_uint = 5;
 pub const IFA_BROADCAST: libc::c_uint = 4;
@@ -50,15 +50,15 @@ pub const IFF_SLAVE: libc::c_uint = 2048;
 pub const IFF_UP: libc::c_uint = 1;
 pub const LONG_MAX: libc::c_long = libc::c_long::MAX;
 pub const MS_NOSYMFOLLOW: libc::c_int = 256;
-pub const NETLINK_ROUTE: libc::c_int = 0 as libc::c_int;
-pub const NLMSG_ALIGNTO: libc::c_uint = 4 as libc::c_uint;
+pub const NETLINK_ROUTE: libc::c_int = 0;
+pub const NLMSG_ALIGNTO: libc::c_uint = 4;
 pub const NLMSG_DONE: libc::c_int = 0x3;
 pub const NLMSG_ERROR: libc::c_int = 0x2;
-pub const NLM_F_ACK: libc::c_int = 0x4 as libc::c_int;
-pub const NLM_F_CREATE: libc::c_int = 0x400 as libc::c_int;
-pub const NLM_F_EXCL: libc::c_int = 0x200 as libc::c_int;
-pub const NLM_F_REQUEST: libc::c_int = 0x1 as libc::c_int;
-pub const RTA_ALIGNTO: libc::c_uint = 4 as libc::c_uint;
+pub const NLM_F_ACK: libc::c_int = 0x4;
+pub const NLM_F_CREATE: libc::c_int = 0x400;
+pub const NLM_F_EXCL: libc::c_int = 0x200;
+pub const NLM_F_REQUEST: libc::c_int = 0x1;
+pub const RTA_ALIGNTO: libc::c_uint = 4;
 pub const RTM_BASE: libc::c_uint = 16;
 pub const RTM_DELACTION: libc::c_uint = 49;
 pub const RTM_DELADDR: libc::c_uint = 21;
@@ -148,8 +148,8 @@ pub const _ISspace: libc::c_uint = 8192;
 pub const _ISupper: libc::c_uint = 256;
 pub const _ISxdigit: libc::c_uint = 4096;
 pub const __IFA_MAX: libc::c_uint = 12;
-pub const __NR_clone: libc::c_int = 56 as libc::c_int;
-pub const __NR_pivot_root: libc::c_int = 155 as libc::c_int;
+pub const __NR_clone: libc::c_int = 56;
+pub const __NR_pivot_root: libc::c_int = 155;
 pub const __RTM_MAX: libc::c_uint = 123;
 pub use libc::access;
 pub use libc::bind;
@@ -529,9 +529,9 @@ pub struct __user_cap_data_struct {
     pub inheritable: u32,
 }
 
-pub const _LINUX_CAPABILITY_VERSION_3: libc::c_int = 0x20080522 as libc::c_int;
-pub const CAP_CHECKPOINT_RESTORE: libc::c_int = 40 as libc::c_int;
-pub const CAP_LAST_CAP: libc::c_int = 40 as libc::c_int;
+pub const _LINUX_CAPABILITY_VERSION_3: libc::c_int = 0x20080522;
+pub const CAP_CHECKPOINT_RESTORE: libc::c_int = 40;
+pub const CAP_LAST_CAP: libc::c_int = 40;
 
 pub const PACKAGE_STRING: [libc::c_char; 18] =
     unsafe { *::core::mem::transmute::<&[u8; 18], &[libc::c_char; 18]>(b"bubblewrap 0.11.0\0") };
