@@ -114,7 +114,7 @@ static mut overflow_gid: gid_t = 0;
 static mut is_privileged: bool = false;
 static mut argv0: *const libc::c_char = 0 as *const libc::c_char;
 static mut host_tty_dev: *const libc::c_char = 0 as *const libc::c_char;
-static mut proc_fd: libc::c_int = -(1);
+static mut proc_fd: libc::c_int = -1;
 static mut opt_exec_label: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
 static mut opt_file_label: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
 static mut opt_as_pid_1: bool = false;
@@ -135,19 +135,19 @@ static mut opt_new_session: bool = false;
 static mut opt_die_with_parent: bool = false;
 static mut opt_sandbox_uid: uid_t = uid_t::MAX;
 static mut opt_sandbox_gid: gid_t = gid_t::MAX;
-static mut opt_sync_fd: libc::c_int = -(1);
-static mut opt_block_fd: libc::c_int = -(1);
-static mut opt_userns_block_fd: libc::c_int = -(1);
-static mut opt_info_fd: libc::c_int = -(1);
-static mut opt_json_status_fd: libc::c_int = -(1);
-static mut opt_seccomp_fd: libc::c_int = -(1);
+static mut opt_sync_fd: libc::c_int = -1;
+static mut opt_block_fd: libc::c_int = -1;
+static mut opt_userns_block_fd: libc::c_int = -1;
+static mut opt_info_fd: libc::c_int = -1;
+static mut opt_json_status_fd: libc::c_int = -1;
+static mut opt_seccomp_fd: libc::c_int = -1;
 static mut opt_sandbox_hostname: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
 static mut opt_args_data: *mut libc::c_char = std::ptr::null_mut() as *mut libc::c_char;
-static mut opt_userns_fd: libc::c_int = -(1);
-static mut opt_userns2_fd: libc::c_int = -(1);
-static mut opt_pidns_fd: libc::c_int = -(1);
+static mut opt_userns_fd: libc::c_int = -1;
+static mut opt_userns2_fd: libc::c_int = -1;
+static mut opt_pidns_fd: libc::c_int = -1;
 static mut opt_tmp_overlay_count: libc::c_int = 0;
-static mut next_perms: libc::c_int = -(1);
+static mut next_perms: libc::c_int = -1;
 static mut next_size_arg: size_t = 0 as size_t;
 static mut next_overlay_src_count: libc::c_int = 0;
 
@@ -231,7 +231,7 @@ static mut last_op: *mut SetupOp = std::ptr::null_mut() as *mut SetupOp;
 unsafe fn setup_op_new(mut type_0: SetupOpType) -> *mut SetupOp {
     let mut op = _op_append_new();
     (*op).type_0 = type_0;
-    (*op).fd = -(1);
+    (*op).fd = -1;
     (*op).flags = 0 as SetupOpFlag;
     return op;
 }
@@ -284,7 +284,7 @@ unsafe fn seccomp_program_new(mut fd: *mut libc::c_int) -> *mut SeccompProgram {
         die_with_error!(b"Can't read seccomp data\0" as *const u8 as *const libc::c_char);
     }
     close(*fd);
-    *fd = -(1);
+    *fd = -1;
     if len.wrapping_rem(8) != 0 {
         die!(b"Invalid seccomp data, must be multiple of 8\0" as *const u8 as *const libc::c_char);
     }
@@ -352,11 +352,11 @@ unsafe fn block_sigchild() {
         libc::SIG_BLOCK,
         &mut mask,
         std::ptr::null_mut() as *mut sigset_t,
-    ) == -(1)
+    ) == -1
     {
         die_with_error!(b"sigprocmask\0" as *const u8 as *const libc::c_char);
     }
-    while waitpid(-(1), &mut status, WNOHANG) > 0 {}
+    while waitpid(-1, &mut status, WNOHANG) > 0 {}
 }
 
 unsafe fn unblock_sigchild() {
@@ -367,7 +367,7 @@ unsafe fn unblock_sigchild() {
         libc::SIG_UNBLOCK,
         &mut mask,
         std::ptr::null_mut() as *mut sigset_t,
-    ) == -(1)
+    ) == -1
     {
         die_with_error!(b"sigprocmask\0" as *const u8 as *const libc::c_char);
     }
@@ -377,7 +377,7 @@ unsafe fn close_extra_fds(mut data: *mut libc::c_void, mut fd: libc::c_int) -> l
     let mut extra_fds = data as *mut libc::c_int;
     let mut i: libc::c_int = 0;
     i = 0;
-    while *extra_fds.offset(i as isize) != -(1) {
+    while *extra_fds.offset(i as isize) != -1 {
         if fd == *extra_fds.offset(i as isize) {
             return 0;
         }
@@ -411,7 +411,7 @@ unsafe fn report_child_exit_status(mut exitc: libc::c_int, mut setup_finished_fd
     let mut s: ssize_t = 0;
     let mut data: [libc::c_char; 2] = [0; 2];
     let mut output = std::ptr::null_mut() as *mut libc::c_char;
-    if opt_json_status_fd == -(1) || setup_finished_fd == -(1) {
+    if opt_json_status_fd == -1 || setup_finished_fd == -1 {
         return;
     }
     s = loop {
@@ -420,11 +420,11 @@ unsafe fn report_child_exit_status(mut exitc: libc::c_int, mut setup_finished_fd
             data.as_mut_ptr() as *mut libc::c_void,
             ::core::mem::size_of::<[libc::c_char; 2]>(),
         );
-        if !(__result == -(1) && errno!() == EINTR) {
+        if !(__result == -1 && errno!() == EINTR) {
             break __result;
         }
     };
-    if s == -(1) && errno!() != libc::EAGAIN {
+    if s == -1 && errno!() != libc::EAGAIN {
         die_with_error!(b"read eventfd\0" as *const u8 as *const libc::c_char);
     }
     if s != 1 {
@@ -436,7 +436,7 @@ unsafe fn report_child_exit_status(mut exitc: libc::c_int, mut setup_finished_fd
     );
     dump_info(opt_json_status_fd, output, false);
     close(opt_json_status_fd);
-    opt_json_status_fd = -(1);
+    opt_json_status_fd = -1;
     close(setup_finished_fd);
 }
 
@@ -457,22 +457,22 @@ unsafe fn monitor_child(
     }; 2];
     let mut num_fds: libc::c_int = 0;
     let mut fdsi = std::mem::zeroed();
-    let mut dont_close: [libc::c_int; 4] = [-(1), -(1), -(1), -(1)];
-    let mut j = 0 as libc::c_uint;
+    let mut dont_close: [libc::c_int; 4] = [-1, -1, -1, -1];
+    let mut j: libc::c_int = 0;
     let mut exitc: libc::c_int = 0;
     let mut died_pid: pid_t = 0;
     let mut died_status: libc::c_int = 0;
-    if event_fd != -(1) {
+    if event_fd != -1 {
         let fresh0 = j;
         j = j.wrapping_add(1);
         dont_close[fresh0 as usize] = event_fd;
     }
-    if opt_json_status_fd != -(1) {
+    if opt_json_status_fd != -1 {
         let fresh1 = j;
         j = j.wrapping_add(1);
         dont_close[fresh1 as usize] = opt_json_status_fd;
     }
-    if setup_finished_fd != -(1) {
+    if setup_finished_fd != -1 {
         let fresh2 = j;
         j = j.wrapping_add(1);
         dont_close[fresh2 as usize] = setup_finished_fd;
@@ -489,26 +489,26 @@ unsafe fn monitor_child(
     );
     sigemptyset(&mut mask);
     sigaddset(&mut mask, libc::SIGCHLD);
-    signal_fd = signalfd(-(1), &mut mask, libc::SFD_CLOEXEC | libc::SFD_NONBLOCK);
-    if signal_fd == -(1) {
+    signal_fd = signalfd(-1, &mut mask, libc::SFD_CLOEXEC | libc::SFD_NONBLOCK);
+    if signal_fd == -1 {
         die_with_error!(b"Can't create signalfd\0" as *const u8 as *const libc::c_char);
     }
     num_fds = 1;
     fds[0 as usize].fd = signal_fd;
     fds[0 as usize].events = POLLIN as libc::c_short;
-    if event_fd != -(1) {
+    if event_fd != -1 {
         fds[1 as usize].fd = event_fd;
         fds[1 as usize].events = POLLIN as libc::c_short;
         num_fds += 1;
     }
     loop {
-        fds[1 as usize].revents = 0 as libc::c_short;
+        fds[1 as usize].revents = 0;
         fds[0 as usize].revents = fds[1 as usize].revents;
-        res = poll(fds.as_mut_ptr(), num_fds as nfds_t, -(1));
-        if res == -(1) && errno!() != EINTR {
+        res = poll(fds.as_mut_ptr(), num_fds as nfds_t, -1);
+        if res == -1 && errno!() != EINTR {
             die_with_error!(b"poll\0" as *const u8 as *const libc::c_char);
         }
-        if event_fd != -(1) {
+        if event_fd != -1 {
             s = read(
                 event_fd,
                 &mut val as *mut u64 as *mut libc::c_void,
@@ -531,7 +531,7 @@ unsafe fn monitor_child(
             die_with_error!(b"read signalfd\0" as *const u8 as *const libc::c_char);
         }
         loop {
-            died_pid = waitpid(-(1), &mut died_status, libc::WNOHANG);
+            died_pid = waitpid(-1, &mut died_status, libc::WNOHANG);
             if !(died_pid > 0) {
                 break;
             }
@@ -553,13 +553,13 @@ unsafe fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) -> libc::c_
             let mut __result: libc::c_long = 0;
             loop {
                 __result = open((*lock).path, 0 | 0o2000000) as libc::c_long;
-                if !(__result == -(1) && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == EINTR) {
                     break;
                 }
             }
             __result
         }) as libc::c_int;
-        if fd == -(1) {
+        if fd == -1 {
             die_with_error!(
                 b"Unable to open lock file %s\0" as *const u8 as *const libc::c_char,
                 (*lock).path,
@@ -579,12 +579,12 @@ unsafe fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) -> libc::c_
             let mut __result: libc::c_long = 0;
             loop {
                 __result = fcntl(fd, 6, &mut l as *mut flock) as libc::c_long;
-                if !(__result == -(1) && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == EINTR) {
                     break;
                 }
             }
             __result
-        }) < 0 as libc::c_long
+        }) < 0
         {
             die_with_error!(
                 b"Unable to lock file %s\0" as *const u8 as *const libc::c_char,
@@ -603,7 +603,7 @@ unsafe fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) -> libc::c_
             let mut __result: libc::c_long = 0;
             loop {
                 __result = wait(&mut status) as libc::c_long;
-                if !(__result == -(1) && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == EINTR) {
                     break;
                 }
             }
@@ -611,20 +611,20 @@ unsafe fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) -> libc::c_
         }) as pid_t;
         if child == initial_pid {
             initial_exit_status = propagate_exit_status(status);
-            if event_fd != -(1) {
+            if event_fd != -1 {
                 let mut val = (initial_exit_status + 1) as u64;
                 let _res: isize = {
                     loop {
                         let __result =
                             write(event_fd, &raw mut val as *const libc::c_void, 8 as size_t);
-                        if !(__result == -(1) && errno!() == EINTR) {
+                        if !(__result == -1 && errno!() == EINTR) {
                             break __result as _;
                         }
                     }
                 };
             }
         }
-        if !(child == -(1) && errno!() != EINTR) {
+        if !(child == -1 && errno!() != EINTR) {
             continue;
         }
         if errno!() != ECHILD {
@@ -636,7 +636,7 @@ unsafe fn do_init(mut event_fd: libc::c_int, mut initial_pid: pid_t) -> libc::c_
     while !lock.is_null() {
         if (*lock).fd >= 0 {
             close((*lock).fd);
-            (*lock).fd = -(1);
+            (*lock).fd = -1;
         }
         lock = (*lock).next;
     }
@@ -714,7 +714,7 @@ unsafe fn drop_all_caps(mut keep_requested_caps: bool) {
         },
     ];
     if keep_requested_caps {
-        if !opt_cap_add_or_drop_used && real_uid == 0 as libc::c_uint {
+        if !opt_cap_add_or_drop_used && real_uid == 0 {
             assert!(!is_privileged);
             return;
         }
@@ -726,7 +726,7 @@ unsafe fn drop_all_caps(mut keep_requested_caps: bool) {
         data[1 as usize].inheritable = requested_caps[1 as usize];
     }
     if capset(&mut hdr, data.as_mut_ptr()) < 0 {
-        if errno!() == EPERM && real_uid == 0 as libc::c_uint && !is_privileged {
+        if errno!() == EPERM && real_uid == 0 && !is_privileged {
             return;
         } else {
             die_with_error!(b"capset failed\0" as *const u8 as *const libc::c_char);
@@ -760,28 +760,25 @@ unsafe fn has_caps() -> bool {
     if capget(&mut hdr, data.as_mut_ptr()) < 0 {
         die_with_error!(b"capget failed\0" as *const u8 as *const libc::c_char);
     }
-    return data[0 as usize].permitted != 0 as libc::c_uint
-        || data[1 as usize].permitted != 0 as libc::c_uint;
+    return data[0 as usize].permitted != 0 || data[1 as usize].permitted != 0;
 }
 
 unsafe fn prctl_caps(mut caps: *mut u32, mut do_cap_bounding: bool, mut do_set_ambient: bool) {
     let mut cap: libc::c_ulong = 0;
-    cap = 0 as libc::c_ulong;
+    cap = 0;
     while cap <= CAP_LAST_CAP as libc::c_ulong {
         let mut keep = false;
-        if cap < 32 as libc::c_ulong {
-            if (1) << (cap & 31 as libc::c_ulong) & *caps.offset(0 as isize) as libc::c_long != 0 {
+        if cap < 32 {
+            if (1) << (cap & 31) & *caps.offset(0 as isize) as libc::c_long != 0 {
                 keep = true;
             }
-        } else if (1) << (cap.wrapping_sub(32 as libc::c_ulong) & 31 as libc::c_ulong)
-            & *caps.offset(1 as isize) as libc::c_long
-            != 0
+        } else if (1) << (cap.wrapping_sub(32) & 31) & *caps.offset(1 as isize) as libc::c_long != 0
         {
             keep = true;
         }
         if keep as libc::c_int != 0 && do_set_ambient as libc::c_int != 0 {
             let mut res = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, cap, 0, 0);
-            if res == -(1) && !(errno!() == EINVAL || errno!() == EPERM) {
+            if res == -1 && !(errno!() == EINVAL || errno!() == EPERM) {
                 die_with_error!(
                     b"Adding ambient capability %ld\0" as *const u8 as *const libc::c_char,
                     cap,
@@ -790,7 +787,7 @@ unsafe fn prctl_caps(mut caps: *mut u32, mut do_cap_bounding: bool, mut do_set_a
         }
         if !keep && do_cap_bounding as libc::c_int != 0 {
             let mut res_0 = prctl(PR_CAPBSET_DROP, cap, 0, 0, 0);
-            if res_0 == -(1) && !(errno!() == EINVAL || errno!() == EPERM) {
+            if res_0 == -1 && !(errno!() == EINVAL || errno!() == EPERM) {
                 die_with_error!(
                     b"Dropping capability %ld from bounds\0" as *const u8 as *const libc::c_char,
                     cap,
@@ -822,7 +819,7 @@ unsafe fn acquire_privs() {
     let mut new_fsuid: uid_t = 0;
     euid = geteuid();
     if real_uid != euid {
-        if euid != 0 as libc::c_uint {
+        if euid != 0 {
             die!(
                 b"Unexpected setuid user %d, should be 0\0" as *const u8 as *const libc::c_char,
                 euid,
@@ -841,12 +838,12 @@ unsafe fn acquire_privs() {
         }
         drop_cap_bounding_set(true);
         set_required_caps();
-    } else if real_uid != 0 as libc::c_uint && has_caps() as libc::c_int != 0 {
+    } else if real_uid != 0 && has_caps() as libc::c_int != 0 {
         die!(
             b"Unexpected capabilities but not setuid, old file caps config?\0" as *const u8
                 as *const libc::c_char,
         );
-    } else if real_uid == 0 as libc::c_uint {
+    } else if real_uid == 0 {
         let mut hdr = {
             let mut init = __user_cap_header_struct {
                 version: _LINUX_CAPABILITY_VERSION_3 as u32,
@@ -878,10 +875,10 @@ unsafe fn acquire_privs() {
 }
 
 unsafe fn switch_to_user_with_privs() {
-    if opt_unshare_user as libc::c_int != 0 || opt_userns_fd != -(1) {
+    if opt_unshare_user as libc::c_int != 0 || opt_userns_fd != -1 {
         drop_cap_bounding_set(false);
     }
-    if opt_userns_fd != -(1) {
+    if opt_userns_fd != -1 {
         if opt_sandbox_uid != real_uid && setuid(opt_sandbox_uid) < 0 {
             die_with_error!(
                 b"unable to switch to uid %d\0" as *const u8 as *const libc::c_char,
@@ -930,9 +927,9 @@ unsafe fn write_uid_gid_map(
     let mut uid_map = std::ptr::null_mut() as *mut libc::c_char;
     let mut gid_map = std::ptr::null_mut() as *mut libc::c_char;
     let mut dir = std::ptr::null_mut() as *mut libc::c_char;
-    let mut dir_fd = -(1);
+    let mut dir_fd = -1;
     let mut old_fsuid = uid_t::MAX;
-    if pid == -(1) {
+    if pid == -1 {
         dir = xstrdup(b"self\0" as *const u8 as *const libc::c_char);
     } else {
         dir = xasprintf(b"%d\0" as *const u8 as *const libc::c_char, pid);
@@ -944,10 +941,7 @@ unsafe fn write_uid_gid_map(
             dir,
         );
     }
-    if map_root as libc::c_int != 0
-        && parent_uid != 0 as libc::c_uint
-        && sandbox_uid != 0 as libc::c_uint
-    {
+    if map_root as libc::c_int != 0 && parent_uid != 0 && sandbox_uid != 0 {
         uid_map = xasprintf(
             b"0 %d 1\n%d %d 1\n\0" as *const u8 as *const libc::c_char,
             overflow_uid,
@@ -961,10 +955,7 @@ unsafe fn write_uid_gid_map(
             parent_uid,
         );
     }
-    if map_root as libc::c_int != 0
-        && parent_gid != 0 as libc::c_uint
-        && sandbox_gid != 0 as libc::c_uint
-    {
+    if map_root as libc::c_int != 0 && parent_gid != 0 && sandbox_gid != 0 {
         gid_map = xasprintf(
             b"0 %d 1\n%d %d 1\n\0" as *const u8 as *const libc::c_char,
             overflow_gid,
@@ -1027,7 +1018,7 @@ unsafe fn privileged_op(
 ) {
     let mut bind_result = BIND_MOUNT_SUCCESS;
     let mut failing_path = std::ptr::null_mut() as *mut libc::c_char;
-    if privileged_op_socket != -(1) {
+    if privileged_op_socket != -1 {
         let mut buffer: [u32; 2048] = [0; 2048];
         let mut op_buffer = buffer.as_mut_ptr() as *mut PrivSepOp;
         let mut buffer_size = ::core::mem::size_of::<PrivSepOp>();
@@ -1070,7 +1061,7 @@ unsafe fn privileged_op(
                     buffer.as_mut_ptr() as *const libc::c_void,
                     buffer_size,
                 );
-                if !(__result == -(1) && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == EINTR) {
                     break;
                 }
             }
@@ -1087,7 +1078,7 @@ unsafe fn privileged_op(
                     buffer.as_mut_ptr() as *mut libc::c_void,
                     1 as size_t,
                 );
-                if !(__result == -(1) && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == EINTR) {
                     break;
                 }
             }
@@ -1209,7 +1200,7 @@ unsafe fn privileged_op(
                 b"mqueue\0" as *const u8 as *const libc::c_char,
                 arg1,
                 b"mqueue\0" as *const u8 as *const libc::c_char,
-                0 as libc::c_ulong,
+                0,
                 std::ptr::null_mut() as *const libc::c_void,
             ) != 0
             {
@@ -1303,9 +1294,9 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
             3276175668257526147 => {
                 if !((*op).dest).is_null()
                     && (*op).flags as libc::c_uint & NO_CREATE_DEST as libc::c_int as libc::c_uint
-                        == 0 as libc::c_uint
+                        == 0
                 {
-                    let mut parent_mode = 0o755 as libc::c_uint;
+                    let mut parent_mode = 0o755;
                     if (*op).perms >= 0 && (*op).perms & 0o70 == 0 {
                         parent_mode &= !(0o50);
                     }
@@ -1396,7 +1387,7 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                                 );
                             }
                             close((*op).fd);
-                            (*op).fd = -(1);
+                            (*op).fd = -1;
                         }
                     }
                     3 | 5 | 4 => {
@@ -1488,7 +1479,7 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                                 (*op).dest,
                             );
                         }
-                        if unshare_pid as libc::c_int != 0 || opt_pidns_fd != -(1) {
+                        if unshare_pid as libc::c_int != 0 || opt_pidns_fd != -1 {
                             privileged_op(
                                 privileged_op_socket,
                                 PRIV_SEP_OP_PROC_MOUNT as libc::c_int as u32,
@@ -1509,7 +1500,7 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                                 dest,
                             );
                         }
-                        i = 0 as libc::c_uint;
+                        i = 0;
                         while (i as libc::c_ulong)
                             < (::core::mem::size_of::<[*const libc::c_char; 4]>() as libc::c_ulong)
                                 .wrapping_div(
@@ -1559,7 +1550,7 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                             dest,
                             std::ptr::null_mut() as *const libc::c_char,
                         );
-                        i = 0 as libc::c_uint;
+                        i = 0;
                         while (i as libc::c_ulong)
                             < (::core::mem::size_of::<[*const libc::c_char; 6]>() as libc::c_ulong)
                                 .wrapping_div(
@@ -1599,7 +1590,7 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                             );
                             i = i.wrapping_add(1);
                         }
-                        i = 0 as libc::c_uint;
+                        i = 0;
                         while (i as libc::c_ulong)
                             < (::core::mem::size_of::<[*const libc::c_char; 3]>() as libc::c_ulong)
                                 .wrapping_div(
@@ -1655,13 +1646,13 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                             strconcat(dest, b"/ptmx\0" as *const u8 as *const libc::c_char);
                         let mut shm =
                             strconcat(dest, b"/shm\0" as *const u8 as *const libc::c_char);
-                        if mkdir(shm, 0o755 as mode_t) == -(1) {
+                        if mkdir(shm, 0o755 as mode_t) == -1 {
                             die_with_error!(
                                 b"Can't create %s/shm\0" as *const u8 as *const libc::c_char,
                                 (*op).dest,
                             );
                         }
-                        if mkdir(pts, 0o755 as mode_t) == -(1) {
+                        if mkdir(pts, 0o755 as mode_t) == -1 {
                             die_with_error!(
                                 b"Can't create %s/devpts\0" as *const u8 as *const libc::c_char,
                                 (*op).dest,
@@ -1776,12 +1767,12 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                         }
                     }
                     12 => {
-                        let mut dest_fd = -(1);
+                        let mut dest_fd = -1;
                         assert!(!dest.is_null());
                         assert!((*op).perms >= 0);
                         assert!((*op).perms <= 0o7777);
                         dest_fd = creat(dest, (*op).perms as mode_t);
-                        if dest_fd == -(1) {
+                        if dest_fd == -1 {
                             die_with_error!(
                                 b"Can't create file %s\0" as *const u8 as *const libc::c_char,
                                 (*op).dest,
@@ -1795,10 +1786,10 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                             );
                         }
                         close((*op).fd);
-                        (*op).fd = -(1);
+                        (*op).fd = -1;
                     }
                     13 | 14 => {
-                        let mut dest_fd_0 = -(1);
+                        let mut dest_fd_0 = -1;
                         let mut tempfile: [libc::c_char; 16] =
                             *::core::mem::transmute::<&[u8; 16], &mut [libc::c_char; 16]>(
                                 b"/bindfileXXXXXX\0",
@@ -1807,7 +1798,7 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                         assert!((*op).perms >= 0);
                         assert!((*op).perms <= 0o7777);
                         dest_fd_0 = mkstemp(tempfile.as_mut_ptr());
-                        if dest_fd_0 == -(1) {
+                        if dest_fd_0 == -1 {
                             die_with_error!(
                                 b"Can't create tmpfile for %s\0" as *const u8
                                     as *const libc::c_char,
@@ -1830,7 +1821,7 @@ unsafe fn setup_newroot(mut unshare_pid: bool, mut privileged_op_socket: libc::c
                             );
                         }
                         close((*op).fd);
-                        (*op).fd = -(1);
+                        (*op).fd = -1;
                         assert!(!dest.is_null());
                         if ensure_file(dest, 0o444 as mode_t) != 0 {
                             die_with_error!(
@@ -1932,9 +1923,9 @@ unsafe fn close_ops_fd() {
     let mut op = 0 as *mut SetupOp;
     op = ops;
     while !op.is_null() {
-        if (*op).fd != -(1) {
+        if (*op).fd != -1 {
             close((*op).fd);
-            (*op).fd = -(1);
+            (*op).fd = -1;
         }
         op = (*op).next;
     }
@@ -1974,7 +1965,7 @@ unsafe fn resolve_string_offset(
     mut buffer_size: size_t,
     mut offset: u32,
 ) -> *const libc::c_char {
-    if offset == 0 as libc::c_uint {
+    if offset == 0 {
         return std::ptr::null_mut() as *const libc::c_char;
     }
     if offset > buffer_size as u32 {
@@ -2001,7 +1992,7 @@ unsafe fn read_priv_sec_op(
     let mut rec_len: ssize_t = 0;
     loop {
         rec_len = read(read_socket, buffer, buffer_size.wrapping_sub(1));
-        if !(rec_len == -(1) && errno!() == EINTR) {
+        if !(rec_len == -1 && errno!() == EINTR) {
             break;
         }
     }
@@ -2019,7 +2010,7 @@ unsafe fn read_priv_sec_op(
             rec_len,
         );
     }
-    *(buffer as *mut libc::c_char).offset(rec_len as isize) = 0 as libc::c_char;
+    *(buffer as *mut libc::c_char).offset(rec_len as isize) = 0;
     *flags = (*op).flags;
     *perms = (*op).perms;
     *size_arg = (*op).size_arg;
@@ -2460,7 +2451,7 @@ unsafe fn parse_args_recurse(
             } else {
                 (*op).perms = 0o755;
             }
-            next_perms = -(1);
+            next_perms = -1;
             (*op).size = next_size_arg;
             next_size_arg = 0 as size_t;
             argv = argv.offset(1 as isize);
@@ -2484,7 +2475,7 @@ unsafe fn parse_args_recurse(
             } else {
                 (*op).perms = 0o755;
             }
-            next_perms = -(1);
+            next_perms = -1;
             argv = argv.offset(1 as isize);
             argc -= 1;
         } else if strcmp(arg, b"--file\0" as *const u8 as *const libc::c_char) == 0 {
@@ -2511,7 +2502,7 @@ unsafe fn parse_args_recurse(
             } else {
                 (*op).perms = 0o666;
             }
-            next_perms = -(1);
+            next_perms = -1;
             argv = argv.offset(2 as isize);
             argc -= 2;
         } else if strcmp(arg, b"--bind-data\0" as *const u8 as *const libc::c_char) == 0 {
@@ -2538,7 +2529,7 @@ unsafe fn parse_args_recurse(
             } else {
                 (*op).perms = 0o600;
             }
-            next_perms = -(1);
+            next_perms = -1;
             argv = argv.offset(2 as isize);
             argc -= 2;
         } else if strcmp(arg, b"--ro-bind-data\0" as *const u8 as *const libc::c_char) == 0 {
@@ -2565,7 +2556,7 @@ unsafe fn parse_args_recurse(
             } else {
                 (*op).perms = 0o600;
             }
-            next_perms = -(1);
+            next_perms = -1;
             argv = argv.offset(2 as isize);
             argc -= 2;
         } else if strcmp(arg, b"--symlink\0" as *const u8 as *const libc::c_char) == 0 {
@@ -2590,7 +2581,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--sync-fd takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_sync_fd != -(1) {
+            if opt_sync_fd != -1 {
                 warn_only_last_option(b"--sync-fd\0" as *const u8 as *const libc::c_char);
             }
             the_fd_0 = strtol(*argv.offset(1 as isize), &mut endptr_4, 10) as libc::c_int;
@@ -2612,7 +2603,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--block-fd takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_block_fd != -(1) {
+            if opt_block_fd != -1 {
                 warn_only_last_option(b"--block-fd\0" as *const u8 as *const libc::c_char);
             }
             the_fd_1 = strtol(*argv.offset(1 as isize), &mut endptr_5, 10) as libc::c_int;
@@ -2638,7 +2629,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--userns-block-fd takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_userns_block_fd != -(1) {
+            if opt_userns_block_fd != -1 {
                 warn_only_last_option(b"--userns-block-fd\0" as *const u8 as *const libc::c_char);
             }
             the_fd_2 = strtol(*argv.offset(1 as isize), &mut endptr_6, 10) as libc::c_int;
@@ -2660,7 +2651,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--info-fd takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_info_fd != -(1) {
+            if opt_info_fd != -1 {
                 warn_only_last_option(b"--info-fd\0" as *const u8 as *const libc::c_char);
             }
             the_fd_3 = strtol(*argv.offset(1 as isize), &mut endptr_7, 10) as libc::c_int;
@@ -2686,7 +2677,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--json-status-fd takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_json_status_fd != -(1) {
+            if opt_json_status_fd != -1 {
                 warn_only_last_option(b"--json-status-fd\0" as *const u8 as *const libc::c_char);
             }
             the_fd_4 = strtol(*argv.offset(1 as isize), &mut endptr_8, 10) as libc::c_int;
@@ -2714,7 +2705,7 @@ unsafe fn parse_args_recurse(
                         as *const libc::c_char,
                 );
             }
-            if opt_seccomp_fd != -(1) {
+            if opt_seccomp_fd != -1 {
                 warn_only_last_option(b"--seccomp\0" as *const u8 as *const libc::c_char);
             }
             the_fd_5 = strtol(*argv.offset(1 as isize), &mut endptr_9, 10) as libc::c_int;
@@ -2740,7 +2731,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--add-seccomp-fd takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_seccomp_fd != -(1) {
+            if opt_seccomp_fd != -1 {
                 die!(
                     b"--add-seccomp-fd cannot be combined with --seccomp\0" as *const u8
                         as *const libc::c_char,
@@ -2765,7 +2756,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--userns takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_userns_fd != -(1) {
+            if opt_userns_fd != -1 {
                 warn_only_last_option(b"--userns\0" as *const u8 as *const libc::c_char);
             }
             the_fd_7 = strtol(*argv.offset(1 as isize), &mut endptr_11, 10) as libc::c_int;
@@ -2787,7 +2778,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--userns2 takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_userns2_fd != -(1) {
+            if opt_userns2_fd != -1 {
                 warn_only_last_option(b"--userns2\0" as *const u8 as *const libc::c_char);
             }
             the_fd_8 = strtol(*argv.offset(1 as isize), &mut endptr_12, 10) as libc::c_int;
@@ -2809,7 +2800,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--pidns takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if opt_pidns_fd != -(1) {
+            if opt_pidns_fd != -1 {
                 warn_only_last_option(b"--pidns\0" as *const u8 as *const libc::c_char);
             }
             the_fd_9 = strtol(*argv.offset(1 as isize), &mut endptr_13, 10) as libc::c_int;
@@ -2977,7 +2968,7 @@ unsafe fn parse_args_recurse(
             if argc < 2 {
                 die!(b"--perms takes an argument\0" as *const u8 as *const libc::c_char);
             }
-            if next_perms != -(1) {
+            if next_perms != -1 {
                 die!(
                     b"--perms given twice for the same action\0" as *const u8
                         as *const libc::c_char
@@ -2987,7 +2978,7 @@ unsafe fn parse_args_recurse(
             if *(*argv.offset(1 as isize)).offset(0 as isize) as libc::c_int == '\0' as i32
                 || endptr_16.is_null()
                 || *endptr_16 != '\0' as i8
-                || perms > 0o7777 as libc::c_ulong
+                || perms > 0o7777
             {
                 die!(
                     b"--perms takes an octal argument <= 07777\0" as *const u8
@@ -3024,7 +3015,7 @@ unsafe fn parse_args_recurse(
                     == 0
                 || endptr_17.is_null()
                 || *endptr_17 != '\0' as i8
-                || size == 0 as libc::c_ulonglong
+                || size == 0
             {
                 die!(
                     b"--size takes a non-zero number of bytes\0" as *const u8
@@ -3050,7 +3041,7 @@ unsafe fn parse_args_recurse(
             if *(*argv.offset(1 as isize)).offset(0 as isize) as libc::c_int == '\0' as i32
                 || endptr_18.is_null()
                 || *endptr_18 != '\0' as i8
-                || perms_0 > 0o7777 as libc::c_ulong
+                || perms_0 > 0o7777
             {
                 die!(
                     b"--chmod takes an octal argument <= 07777\0" as *const u8
@@ -3124,7 +3115,7 @@ unsafe fn read_overflowids() {
         );
     }
     overflow_uid = strtol(uid_data, std::ptr::null_mut() as *mut *mut libc::c_char, 10) as uid_t;
-    if overflow_uid == 0 as libc::c_uint {
+    if overflow_uid == 0 {
         die!(b"Can't parse /proc/sys/kernel/overflowuid\0" as *const u8 as *const libc::c_char);
     }
     gid_data = load_file_at(
@@ -3137,21 +3128,21 @@ unsafe fn read_overflowids() {
         );
     }
     overflow_gid = strtol(gid_data, std::ptr::null_mut() as *mut *mut libc::c_char, 10) as gid_t;
-    if overflow_gid == 0 as libc::c_uint {
+    if overflow_gid == 0 {
         die!(b"Can't parse /proc/sys/kernel/overflowgid\0" as *const u8 as *const libc::c_char);
     }
 }
 
 unsafe fn namespace_ids_read(mut pid: pid_t) {
     let mut dir = std::ptr::null_mut() as *mut libc::c_char;
-    let mut ns_fd = -(1);
+    let mut ns_fd = -1;
     let mut info = 0 as *mut NsInfo;
     dir = xasprintf(b"%d/ns\0" as *const u8 as *const libc::c_char, pid);
     ns_fd = ({
         let mut __result: libc::c_long = 0;
         loop {
             __result = openat(proc_fd, dir, 0o10000000) as libc::c_long;
-            if !(__result == -(1) && errno!() == EINTR) {
+            if !(__result == -1 && errno!() == EINTR) {
                 break;
             }
         }
@@ -3186,7 +3177,7 @@ unsafe fn namespace_ids_write(mut fd: libc::c_int, mut in_json: bool) {
         let mut indent = 0 as *const libc::c_char;
         let mut nsid: uintmax_t = 0;
         nsid = (*info).id;
-        if !(nsid == 0 as libc::c_ulong) {
+        if !(nsid == 0) {
             indent = if in_json as libc::c_int != 0 {
                 b" \0" as *const u8 as *const libc::c_char
             } else {
@@ -3210,9 +3201,9 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     let mut clone_flags: libc::c_int = 0;
     let mut old_cwd = std::ptr::null_mut() as *mut libc::c_char;
     let mut pid: pid_t = 0;
-    let mut event_fd = -(1);
-    let mut child_wait_fd = -(1);
-    let mut setup_finished_pipe: [libc::c_int; 2] = [-(1), -(1)];
+    let mut event_fd = -1;
+    let mut child_wait_fd = -1;
+    let mut setup_finished_pipe: [libc::c_int; 2] = [-1, -1];
     let mut new_cwd = 0 as *const libc::c_char;
     let mut ns_uid: uid_t = 0;
     let mut ns_gid: gid_t = 0;
@@ -3220,7 +3211,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     let mut val: u64 = 0;
     let mut res: libc::c_int = 0;
     let mut args_data = std::ptr::null_mut() as *mut libc::c_char;
-    let mut intermediate_pids_sockets: [libc::c_int; 2] = [-(1), -(1)];
+    let mut intermediate_pids_sockets: [libc::c_int; 2] = [-1, -1];
     let mut exec_path = std::ptr::null_mut() as *const libc::c_char;
     let mut i: libc::c_int = 0;
     if argc == 2
@@ -3261,34 +3252,34 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                 as *const libc::c_char,
         );
     }
-    if opt_userns_block_fd != -(1) && !opt_unshare_user {
+    if opt_userns_block_fd != -1 && !opt_unshare_user {
         die!(b"--userns-block-fd requires --unshare-user\0" as *const u8 as *const libc::c_char);
     }
-    if opt_userns_block_fd != -(1) && opt_info_fd == -(1) {
+    if opt_userns_block_fd != -1 && opt_info_fd == -1 {
         die!(b"--userns-block-fd requires --info-fd\0" as *const u8 as *const libc::c_char);
     }
-    if opt_userns_fd != -(1) && opt_unshare_user as libc::c_int != 0 {
+    if opt_userns_fd != -1 && opt_unshare_user as libc::c_int != 0 {
         die!(b"--userns not compatible --unshare-user\0" as *const u8 as *const libc::c_char);
     }
-    if opt_userns_fd != -(1) && opt_unshare_user_try as libc::c_int != 0 {
+    if opt_userns_fd != -1 && opt_unshare_user_try as libc::c_int != 0 {
         die!(b"--userns not compatible --unshare-user-try\0" as *const u8 as *const libc::c_char);
     }
     if opt_disable_userns as libc::c_int != 0 && !opt_unshare_user {
         die!(b"--disable-userns requires --unshare-user\0" as *const u8 as *const libc::c_char);
     }
-    if opt_disable_userns as libc::c_int != 0 && opt_userns_block_fd != -(1) {
+    if opt_disable_userns as libc::c_int != 0 && opt_userns_block_fd != -1 {
         die!(
             b"--disable-userns is not compatible with  --userns-block-fd\0" as *const u8
                 as *const libc::c_char,
         );
     }
-    if opt_userns_fd != -(1) && is_privileged as libc::c_int != 0 {
+    if opt_userns_fd != -1 && is_privileged as libc::c_int != 0 {
         die!(b"--userns doesn't work in setuid mode\0" as *const u8 as *const libc::c_char);
     }
-    if opt_userns2_fd != -(1) && is_privileged as libc::c_int != 0 {
+    if opt_userns2_fd != -1 && is_privileged as libc::c_int != 0 {
         die!(b"--userns2 doesn't work in setuid mode\0" as *const u8 as *const libc::c_char);
     }
-    if !is_privileged && getuid() != 0 as libc::c_uint && opt_userns_fd == -(1) {
+    if !is_privileged && getuid() != 0 && opt_userns_fd == -1 {
         opt_unshare_user = true;
     }
     if opt_unshare_user_try as libc::c_int != 0
@@ -3342,13 +3333,13 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if opt_sandbox_gid == gid_t::MAX {
         opt_sandbox_gid = real_gid;
     }
-    if !opt_unshare_user && opt_userns_fd == -(1) && opt_sandbox_uid != real_uid {
+    if !opt_unshare_user && opt_userns_fd == -1 && opt_sandbox_uid != real_uid {
         die!(
             b"Specifying --uid requires --unshare-user or --userns\0" as *const u8
                 as *const libc::c_char,
         );
     }
-    if !opt_unshare_user && opt_userns_fd == -(1) && opt_sandbox_gid != real_gid {
+    if !opt_unshare_user && opt_userns_fd == -1 && opt_sandbox_gid != real_gid {
         die!(
             b"Specifying --gid requires --unshare-user or --userns\0" as *const u8
                 as *const libc::c_char,
@@ -3371,19 +3362,19 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         loop {
             __result =
                 open(b"/proc\0" as *const u8 as *const libc::c_char, 0o10000000) as libc::c_long;
-            if !(__result == -(1) && errno!() == EINTR) {
+            if !(__result == -1 && errno!() == EINTR) {
                 break;
             }
         }
         __result
     }) as libc::c_int;
-    if proc_fd == -(1) {
+    if proc_fd == -1 {
         die_with_error!(b"Can't open /proc\0" as *const u8 as *const libc::c_char);
     }
     base_path = b"/tmp\0" as *const u8 as *const libc::c_char;
     if opt_unshare_pid as libc::c_int != 0 && !opt_as_pid_1 {
-        event_fd = eventfd(0 as libc::c_uint, EFD_CLOEXEC | EFD_NONBLOCK);
-        if event_fd == -(1) {
+        event_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        if event_fd == -1 {
             die_with_error!(b"eventfd()\0" as *const u8 as *const libc::c_char);
         }
     }
@@ -3392,7 +3383,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if opt_unshare_user {
         clone_flags |= CLONE_NEWUSER;
     }
-    if opt_unshare_pid as libc::c_int != 0 && opt_pidns_fd == -(1) {
+    if opt_unshare_pid as libc::c_int != 0 && opt_pidns_fd == -1 {
         clone_flags |= CLONE_NEWPID;
     }
     if opt_unshare_net {
@@ -3432,14 +3423,14 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             clone_flags |= CLONE_NEWCGROUP;
         }
     }
-    child_wait_fd = eventfd(0 as libc::c_uint, EFD_CLOEXEC);
-    if child_wait_fd == -(1) {
+    child_wait_fd = eventfd(0, EFD_CLOEXEC);
+    if child_wait_fd == -1 {
         die_with_error!(b"eventfd()\0" as *const u8 as *const libc::c_char);
     }
-    if opt_json_status_fd != -(1) {
+    if opt_json_status_fd != -1 {
         let mut ret: libc::c_int = 0;
         ret = pipe2(setup_finished_pipe.as_mut_ptr(), O_CLOEXEC);
-        if ret == -(1) {
+        if ret == -1 {
             die_with_error!(b"pipe2()\0" as *const u8 as *const libc::c_char);
         }
     }
@@ -3454,12 +3445,12 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             b"Joining specified user namespace failed\0" as *const u8 as *const libc::c_char,
         );
     }
-    if opt_pidns_fd != -(1) {
+    if opt_pidns_fd != -1 {
         prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
         create_pid_socketpair(intermediate_pids_sockets.as_mut_ptr());
     }
     pid = raw_clone(clone_flags as libc::c_ulong, std::ptr::null_mut());
-    if pid == -(1) {
+    if pid == -1 {
         if opt_unshare_user {
             if errno!() == EINVAL {
                 die!(
@@ -3484,7 +3475,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     ns_uid = opt_sandbox_uid;
     ns_gid = opt_sandbox_gid;
     if pid != 0 {
-        if intermediate_pids_sockets[0 as usize] != -(1) {
+        if intermediate_pids_sockets[0 as usize] != -1 {
             close(intermediate_pids_sockets[1 as usize]);
             pid = read_pid_from_socket(intermediate_pids_sockets[0 as usize]);
             close(intermediate_pids_sockets[0 as usize]);
@@ -3492,7 +3483,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         namespace_ids_read(pid);
         if is_privileged as libc::c_int != 0
             && opt_unshare_user as libc::c_int != 0
-            && opt_userns_block_fd == -(1)
+            && opt_userns_block_fd == -1
         {
             write_uid_gid_map(
                 ns_uid,
@@ -3509,7 +3500,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         }
         drop_privs(false, false);
         handle_die_with_parent();
-        if opt_info_fd != -(1) {
+        if opt_info_fd != -1 {
             let mut output = xasprintf(
                 b"{\n    \"child-pid\": %i\0" as *const u8 as *const libc::c_char,
                 pid,
@@ -3523,7 +3514,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             );
             close(opt_info_fd);
         }
-        if opt_json_status_fd != -(1) {
+        if opt_json_status_fd != -1 {
             let mut output_0 = xasprintf(
                 b"{ \"child-pid\": %i\0" as *const u8 as *const libc::c_char,
                 pid,
@@ -3536,7 +3527,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                 true,
             );
         }
-        if opt_userns_block_fd != -(1) {
+        if opt_userns_block_fd != -1 {
             let mut b: [libc::c_char; 1] = [0; 1];
             ({
                 loop {
@@ -3545,7 +3536,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                         b.as_mut_ptr() as *mut libc::c_void,
                         1 as size_t,
                     );
-                    if !(__result == -(1) && errno!() == EINTR) {
+                    if !(__result == -1 && errno!() == EINTR) {
                         break __result;
                     }
                 }
@@ -3557,7 +3548,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                         b.as_mut_ptr() as *mut libc::c_void,
                         1 as size_t,
                     );
-                    if !(__result == -(1) && errno!() == EINTR) {
+                    if !(__result == -1 && errno!() == EINTR) {
                         break __result;
                     }
                 }
@@ -3572,7 +3563,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                     &mut val as *mut u64 as *const libc::c_void,
                     8 as size_t,
                 );
-                if !(__result == -(1) && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == EINTR) {
                     break __result;
                 }
             }
@@ -3595,10 +3586,10 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         send_pid_on_socket(intermediate_pids_sockets[1 as usize]);
         close(intermediate_pids_sockets[1 as usize]);
     }
-    if opt_info_fd != -(1) {
+    if opt_info_fd != -1 {
         close(opt_info_fd);
     }
-    if opt_json_status_fd != -(1) {
+    if opt_json_status_fd != -1 {
         close(opt_json_status_fd);
     }
     res = read(
@@ -3613,12 +3604,12 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     }
     ns_uid = opt_sandbox_uid;
     ns_gid = opt_sandbox_gid;
-    if !is_privileged && opt_unshare_user as libc::c_int != 0 && opt_userns_block_fd == -(1) {
+    if !is_privileged && opt_unshare_user as libc::c_int != 0 && opt_userns_block_fd == -1 {
         if opt_needs_devpts {
             ns_uid = 0 as uid_t;
             ns_gid = 0 as gid_t;
         }
-        write_uid_gid_map(ns_uid, real_uid, ns_gid, real_gid, -(1), true, false);
+        write_uid_gid_map(ns_uid, real_uid, ns_gid, real_gid, -1, true, false);
     }
     old_umask = umask(0 as mode_t);
     resolve_symlinks_in_ops();
@@ -3717,7 +3708,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             die_with_error!(b"Can't create privsep socket\0" as *const u8 as *const libc::c_char);
         }
         child = fork();
-        if child == -(1) {
+        if child == -1 {
             die_with_error!(
                 b"Can't fork unprivileged helper\0" as *const u8 as *const libc::c_char
             );
@@ -3736,7 +3727,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             let mut size_arg: size_t = 0;
             let mut arg1 = 0 as *const libc::c_char;
             let mut arg2 = 0 as *const libc::c_char;
-            let mut unpriv_socket = -(1);
+            let mut unpriv_socket = -1;
             unpriv_socket = privsep_sockets[0 as usize];
             close(privsep_sockets[1 as usize]);
             loop {
@@ -3750,12 +3741,12 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                     &mut arg1,
                     &mut arg2,
                 );
-                privileged_op(-(1), op, flags, perms, size_arg, arg1, arg2);
+                privileged_op(-1, op, flags, perms, size_arg, arg1, arg2);
                 if ({
                     loop {
                         let __result =
                             write(unpriv_socket, buffer.as_mut_ptr() as *const libc::c_void, 1);
-                        if !(__result == -(1) && errno!() == EINTR) {
+                        if !(__result == -1 && errno!() == EINTR) {
                             break __result;
                         }
                     }
@@ -3770,13 +3761,13 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             let mut __result: libc::c_long = 0;
             loop {
                 __result = waitpid(child, &mut status, 0) as libc::c_long;
-                if !(__result == -(1) && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == EINTR) {
                     break;
                 }
             }
         }
     } else {
-        setup_newroot(opt_unshare_pid, -(1));
+        setup_newroot(opt_unshare_pid, -1);
     }
     close_ops_fd();
     if mount(
@@ -3799,7 +3790,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         loop {
             __result_0 =
                 open(b"/\0" as *const u8 as *const libc::c_char, 0o200000 | 0) as libc::c_long;
-            if !(__result_0 == -(1) && errno!() == EINTR) {
+            if !(__result_0 == -1 && errno!() == EINTR) {
                 break;
             }
         }
@@ -3831,13 +3822,13 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         die_with_error!(b"Setting userns2 failed\0" as *const u8 as *const libc::c_char);
     }
     if opt_unshare_user as libc::c_int != 0
-        && opt_userns_block_fd == -(1)
+        && opt_userns_block_fd == -1
         && (ns_uid != opt_sandbox_uid
             || ns_gid != opt_sandbox_gid
             || opt_disable_userns as libc::c_int != 0)
     {
         if opt_disable_userns {
-            let mut sysctl_fd = -(1);
+            let mut sysctl_fd = -1;
             sysctl_fd = ({
                 let mut __result_0: libc::c_long = 0;
                 loop {
@@ -3846,7 +3837,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                         b"sys/user/max_user_namespaces\0" as *const u8 as *const libc::c_char,
                         0o1,
                     ) as libc::c_long;
-                    if !(__result_0 == -(1) && errno!() == EINTR) {
+                    if !(__result_0 == -1 && errno!() == EINTR) {
                         break;
                     }
                 }
@@ -3878,7 +3869,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             ns_uid,
             opt_sandbox_gid,
             ns_gid,
-            -(1),
+            -1,
             false,
             false,
         );
@@ -3893,7 +3884,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         }
     }
     drop_privs(!is_privileged, true);
-    if opt_block_fd != -(1) {
+    if opt_block_fd != -1 {
         let mut b_0: [libc::c_char; 1] = [0; 1];
         ({
             loop {
@@ -3902,7 +3893,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                     b_0.as_mut_ptr() as *mut libc::c_void,
                     1 as size_t,
                 );
-                if !(__result_0 == -(1) && errno!() == EINTR) {
+                if !(__result_0 == -1 && errno!() == EINTR) {
                     break __result_0;
                 }
             }
@@ -3914,14 +3905,14 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                     b_0.as_mut_ptr() as *mut libc::c_void,
                     1 as size_t,
                 );
-                if !(__result_0 == -(1) && errno!() == EINTR) {
+                if !(__result_0 == -1 && errno!() == EINTR) {
                     break __result_0;
                 }
             }
         });
         close(opt_block_fd);
     }
-    if opt_seccomp_fd != -(1) {
+    if opt_seccomp_fd != -1 {
         assert!(seccomp_programs.is_null())
     }
     umask(old_umask);
@@ -3944,39 +3935,39 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     }
     xsetenv(b"PWD\0" as *const u8 as *const libc::c_char, new_cwd, 1);
     free(old_cwd as *mut libc::c_void);
-    if opt_new_session as libc::c_int != 0 && setsid() == -(1) {
+    if opt_new_session as libc::c_int != 0 && setsid() == -1 {
         die_with_error!(b"setsid\0" as *const u8 as *const libc::c_char);
     }
-    if label_exec(opt_exec_label) == -(1) {
+    if label_exec(opt_exec_label) == -1 {
         die_with_error!(
             b"label_exec %s\0" as *const u8 as *const libc::c_char,
             *argv.offset(0 as isize),
         );
     }
     if !opt_as_pid_1
-        && (opt_unshare_pid as libc::c_int != 0 || !lock_files.is_null() || opt_sync_fd != -(1))
+        && (opt_unshare_pid as libc::c_int != 0 || !lock_files.is_null() || opt_sync_fd != -1)
     {
         pid = fork();
-        if pid == -(1) {
+        if pid == -1 {
             die_with_error!(b"Can't fork for pid 1\0" as *const u8 as *const libc::c_char);
         }
         if pid != 0 {
             drop_all_caps(false);
             let mut dont_close: [libc::c_int; 3] = [0; 3];
             let mut j = 0;
-            if event_fd != -(1) {
+            if event_fd != -1 {
                 let fresh6 = j;
                 j = j + 1;
                 dont_close[fresh6 as usize] = event_fd;
             }
-            if opt_sync_fd != -(1) {
+            if opt_sync_fd != -1 {
                 let fresh7 = j;
                 j = j + 1;
                 dont_close[fresh7 as usize] = opt_sync_fd;
             }
             let fresh8 = j;
             j = j + 1;
-            dont_close[fresh8 as usize] = -(1);
+            dont_close[fresh8 as usize] = -1;
             fdwalk(
                 proc_fd,
                 Some(close_extra_fds as unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int),
@@ -3985,10 +3976,10 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             return do_init(event_fd, pid);
         }
     }
-    if proc_fd != -(1) {
+    if proc_fd != -1 {
         close(proc_fd);
     }
-    if !opt_as_pid_1 && opt_sync_fd != -(1) {
+    if !opt_as_pid_1 && opt_sync_fd != -1 {
         close(opt_sync_fd);
     }
     unblock_sigchild();
@@ -3997,8 +3988,8 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         set_ambient_capabilities();
     }
     seccomp_programs_apply();
-    if setup_finished_pipe[1 as usize] != -(1) {
-        let mut data = 0 as libc::c_char;
+    if setup_finished_pipe[1 as usize] != -1 {
+        let mut data = 0;
         res = write_to_fd(setup_finished_pipe[1 as usize], &mut data, 1 as ssize_t);
     }
     exec_path = *argv.offset(0 as isize);
@@ -4006,10 +3997,10 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         let ref mut fresh9 = *argv.offset(0 as isize);
         *fresh9 = opt_argv0 as *mut libc::c_char;
     }
-    if execvp(exec_path, argv as *const *const libc::c_char) == -(1) {
-        if setup_finished_pipe[1 as usize] != -(1) {
+    if execvp(exec_path, argv as *const *const libc::c_char) == -1 {
+        if setup_finished_pipe[1 as usize] != -1 {
             let mut saved_errno = errno!();
-            let mut data_0 = 0 as libc::c_char;
+            let mut data_0 = 0;
             res = write_to_fd(setup_finished_pipe[1 as usize], &mut data_0, 1 as ssize_t);
             errno!() = saved_errno;
         }

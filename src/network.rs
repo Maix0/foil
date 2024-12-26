@@ -17,8 +17,8 @@ unsafe fn add_rta(
     rta = (header as *mut libc::c_char).offset(
         (((*header).nlmsg_len)
             .wrapping_add(NLMSG_ALIGNTO)
-            .wrapping_sub(1 as libc::c_uint)
-            & !NLMSG_ALIGNTO.wrapping_sub(1 as libc::c_uint)) as isize,
+            .wrapping_sub(1)
+            & !NLMSG_ALIGNTO.wrapping_sub(1)) as isize,
     ) as *mut rtattr;
     (*rta).rta_type = type_0 as u16;
     (*rta).rta_len = rta_size as libc::c_ushort;
@@ -30,9 +30,9 @@ unsafe fn add_rta(
     return (rta as *mut libc::c_char).offset(
         ((::core::mem::size_of::<rtattr>() as libc::c_ulong)
             .wrapping_add(RTA_ALIGNTO as libc::c_ulong)
-            .wrapping_sub(1 as libc::c_ulong)
-            & !RTA_ALIGNTO.wrapping_sub(1 as libc::c_uint) as libc::c_ulong)
-            .wrapping_add(0 as libc::c_ulong) as isize,
+            .wrapping_sub(1)
+            & !RTA_ALIGNTO.wrapping_sub(1) as libc::c_ulong)
+            .wrapping_add(0) as isize,
     ) as *mut libc::c_void;
 }
 
@@ -50,13 +50,13 @@ unsafe fn rtnl_send_request(mut rtnl_fd: libc::c_int, mut header: *mut nlmsghdr)
                 dst_addr.as_ptr() as *mut sockaddr,
                 ::core::mem::size_of::<sockaddr_nl>() as socklen_t,
             );
-            if !(__result == -(1) && errno!() == libc::EINTR) {
+            if !(__result == -1 && errno!() == libc::EINTR) {
                 break __result;
             }
         }
     };
     if sent < 0 {
-        return -(1);
+        return -1;
     }
     return 0;
 }
@@ -73,28 +73,28 @@ unsafe fn rtnl_read_reply(mut rtnl_fd: libc::c_int, mut seq_nr: libc::c_uint) ->
                 ::core::mem::size_of::<[libc::c_char; 1024]>(),
                 0,
             );
-            if !(__result == -(1) && errno!() == libc::EINTR) {
+            if !(__result == -1 && errno!() == libc::EINTR) {
                 break __result;
             }
         };
         if received < 0 {
-            return -(1);
+            return -1;
         }
         rheader = buffer.as_mut_ptr() as *mut nlmsghdr;
         while received >= NLMSG_HDRLEN as isize {
             if (*rheader).nlmsg_seq != seq_nr {
-                return -(1);
+                return -1;
             }
             if (*rheader).nlmsg_pid as pid_t != getpid() {
-                return -(1);
+                return -1;
             }
             if (*rheader).nlmsg_type as libc::c_int == libc::NLMSG_ERROR {
                 let mut err = (rheader as *mut libc::c_char).offset(NLMSG_HDRLEN as _)
                     as *mut libc::c_void as *mut u32;
-                if *err == 0 as libc::c_uint {
+                if *err == 0 {
                     return 0;
                 }
-                return -(1);
+                return -1;
             }
             if (*rheader).nlmsg_type as libc::c_int == libc::NLMSG_DONE {
                 return 0;
@@ -115,10 +115,10 @@ unsafe fn rtnl_read_reply(mut rtnl_fd: libc::c_int, mut seq_nr: libc::c_uint) ->
 
 unsafe fn rtnl_do_request(mut rtnl_fd: libc::c_int, mut header: *mut nlmsghdr) -> libc::c_int {
     if rtnl_send_request(rtnl_fd, header) != 0 {
-        return -(1);
+        return -1;
     }
     if rtnl_read_reply(rtnl_fd, (*header).nlmsg_seq) != 0 {
-        return -(1);
+        return -1;
     }
     return 0;
 }
@@ -147,7 +147,7 @@ unsafe fn rtnl_setup_request(
 pub unsafe fn loopback_setup() {
     let mut r: libc::c_int = 0;
     let mut if_loopback: libc::c_int = 0;
-    let mut rtnl_fd = -(1);
+    let mut rtnl_fd = -1;
     let mut buffer: [libc::c_char; 1024] = [0; 1024];
     let mut src_addr: MaybeUninit<sockaddr_nl> = MaybeUninit::zeroed();
     *addr_of_mut!((*src_addr.as_mut_ptr()).nl_family) = libc::AF_NETLINK as _;
@@ -223,7 +223,7 @@ pub unsafe fn loopback_setup() {
     infomsg = (header as *mut libc::c_char).offset(NLMSG_HDRLEN as libc::c_int as isize)
         as *mut libc::c_void as *mut ifinfomsg;
     (*infomsg).ifi_family = libc::AF_UNSPEC as libc::c_uchar;
-    (*infomsg).ifi_type = 0 as libc::c_ushort;
+    (*infomsg).ifi_type = 0;
     (*infomsg).ifi_index = if_loopback;
     (*infomsg).ifi_flags = libc::IFF_UP as libc::c_uint;
     (*infomsg).ifi_change = libc::IFF_UP as libc::c_uint;

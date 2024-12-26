@@ -16,7 +16,7 @@ pub unsafe extern "C" fn die_oom() -> ! {
 
 pub unsafe fn fork_intermediate_child() {
     let mut pid = fork();
-    if pid == -(1) {
+    if pid == -1 {
         die_with_error!(b"Can't fork for --pidns\0" as *const u8 as *const libc::c_char);
     }
     if pid != 0 {
@@ -171,7 +171,7 @@ pub unsafe fn strconcat(
         len = (len).wrapping_add(strlen(s2)) as size_t as size_t;
     }
     res = xmalloc(len.wrapping_add(1)) as *mut libc::c_char;
-    *res = 0 as libc::c_char;
+    *res = 0;
     if !s1.is_null() {
         strcat(res, s1);
     }
@@ -198,7 +198,7 @@ pub unsafe fn strconcat3(
         len = (len).wrapping_add(strlen(s3));
     }
     res = xmalloc(len.wrapping_add(1)) as *mut libc::c_char;
-    *res = 0 as libc::c_char;
+    *res = 0;
     if !s1.is_null() {
         strcat(res, s1);
     }
@@ -229,13 +229,13 @@ pub unsafe fn fdwalk(
                 b"self/fd\0" as *const u8 as *const libc::c_char,
                 0o200000 | 0o4000 | 0o2000000 | 0o400,
             ) as libc::c_long;
-            if !(__result == -(1) && errno!() == EINTR) {
+            if !(__result == -1 && errno!() == EINTR) {
                 break;
             }
         }
         __result
     }) as libc::c_int;
-    if dfd == -(1) {
+    if dfd == -1 {
         return res;
     }
     d = fdopendir(dfd);
@@ -298,7 +298,7 @@ pub unsafe fn write_to_fd(
             if res == 0 {
                 errno!() = ENOSPC;
             }
-            return -(1);
+            return -1;
         }
         len -= res;
         content = content.offset(res as isize);
@@ -316,12 +316,12 @@ pub unsafe fn write_file_at(
     let mut errsv: libc::c_int = 0;
     fd = loop {
         let __result = openat(dfd, path, 0o2 | 0o2000000, 0) as libc::c_long;
-        if !(__result == -(1) && errno!() == EINTR) {
+        if !(__result == -1 && errno!() == EINTR) {
             break __result;
         }
     } as libc::c_int;
-    if fd == -(1) {
-        return -(1);
+    if fd == -1 {
+        return -1;
     }
     res = 0 != 0;
     if !content.is_null() {
@@ -343,12 +343,12 @@ pub unsafe fn create_file(
     let mut errsv: libc::c_int = 0;
     fd = loop {
         let __result = creat(path, mode) as libc::c_long;
-        if !(__result == -(1) && errno!() == EINTR) {
+        if !(__result == -1 && errno!() == EINTR) {
             break __result;
         }
     } as libc::c_int;
-    if fd == -(1) {
-        return -(1);
+    if fd == -1 {
+        return -1;
     }
     res = 0;
     if !content.is_null() {
@@ -390,13 +390,13 @@ pub unsafe fn copy_file_data(mut sfd: libc::c_int, mut dfd: libc::c_int) -> libc
             if errno!() == EINTR {
                 continue;
             }
-            return -(1);
+            return -1;
         } else {
             if bytes_read == 0 {
                 break;
             }
             if write_to_fd(dfd, buffer.as_mut_ptr(), bytes_read) != 0 {
-                return -(1);
+                return -1;
             }
         }
     }
@@ -418,24 +418,24 @@ pub unsafe fn copy_file(
             break __result;
         }
     } as libc::c_int;
-    if sfd == -(1) {
-        return -(1);
+    if sfd == -1 {
+        return -1;
     }
     dfd = ({
         let mut __result: libc::c_long = 0;
         loop {
             __result = creat(dst_path, mode) as libc::c_long;
-            if !(__result == -(1) && errno!() == EINTR) {
+            if !(__result == -1 && errno!() == EINTR) {
                 break;
             }
         }
         __result
     }) as libc::c_int;
-    if dfd == -(1) {
+    if dfd == -1 {
         errsv = errno!();
         close(sfd);
         errno!() = errsv;
-        return -(1);
+        return -1;
     }
     res = copy_file_data(sfd, dfd);
     errsv = errno!();
@@ -480,7 +480,7 @@ pub unsafe fn load_file_data(mut fd: libc::c_int, mut size: *mut size_t) -> *mut
             break;
         }
     }
-    *data.offset(data_read as isize) = 0 as libc::c_char;
+    *data.offset(data_read as isize) = 0;
     if !size.is_null() {
         *size = data_read as size_t;
     }
@@ -500,11 +500,11 @@ pub unsafe fn load_file_at(
     let mut errsv: libc::c_int = 0;
     fd = loop {
         let __result = openat(dfd, path, 0o2000000 | 0) as libc::c_long;
-        if !(__result == -(1) && errno!() == EINTR) {
+        if !(__result == -1 && errno!() == EINTR) {
             break __result;
         }
     } as libc::c_int;
-    if fd == -(1) {
+    if fd == -1 {
         return std::ptr::null_mut();
     }
     data = load_file_data(fd, std::ptr::null_mut());
@@ -517,7 +517,7 @@ pub unsafe fn load_file_at(
 pub unsafe fn get_file_mode(mut pathname: *const libc::c_char) -> libc::c_int {
     let mut buf: std::mem::MaybeUninit<libc::stat> = MaybeUninit::uninit();
     if stat(pathname, buf.as_mut_ptr()) != 0 {
-        return -(1);
+        return -1;
     }
     let buf = buf.assume_init();
     return (buf.st_mode & S_IFMT as libc::c_uint) as libc::c_int;
@@ -529,12 +529,12 @@ pub unsafe fn ensure_dir(mut path: *const libc::c_char, mut mode: mode_t) -> lib
         let buf = buf.assume_init();
         if !(buf.st_mode & S_IFMT as libc::c_uint == 0o40000) {
             errno!() = ENOTDIR;
-            return -(1);
+            return -1;
         }
         return 0;
     }
-    if mkdir(path, mode) == -(1) && errno!() != EEXIST {
-        return -(1);
+    if mkdir(path, mode) == -1 && errno!() != EEXIST {
+        return -1;
     }
     return 0;
 }
@@ -548,7 +548,7 @@ pub unsafe fn mkdir_with_parents(
     let mut p = 0 as *mut libc::c_char;
     if pathname.is_null() || *pathname as libc::c_int == '\0' as i32 {
         errno!() = EINVAL;
-        return -(1);
+        return -1;
     }
     fn_0 = xstrdup(pathname);
     p = fn_0;
@@ -568,7 +568,7 @@ pub unsafe fn mkdir_with_parents(
             break;
         }
         if ensure_dir(fn_0, mode) != 0 {
-            return -(1);
+            return -1;
         }
         if !p.is_null() {
             let fresh0 = p;
@@ -586,7 +586,7 @@ pub unsafe fn mkdir_with_parents(
 }
 
 pub unsafe fn send_pid_on_socket(mut sockfd: libc::c_int) {
-    let mut buf: [libc::c_char; 1] = [0 as libc::c_char];
+    let mut buf: [libc::c_char; 1] = [0];
     let mut msg: msghdr = std::mem::zeroed();
     let mut iov = iovec {
         iov_base: buf.as_mut_ptr() as *mut libc::c_void,
@@ -595,13 +595,13 @@ pub unsafe fn send_pid_on_socket(mut sockfd: libc::c_int) {
 
     let control_len_snd = ((::core::mem::size_of::<ucred>() as libc::c_ulong)
         .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
-        .wrapping_sub(1 as libc::c_ulong)
-        & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1 as libc::c_ulong))
+        .wrapping_sub(1)
+        & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1))
     .wrapping_add(
         (::core::mem::size_of::<cmsghdr>() as libc::c_ulong)
             .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
-            .wrapping_sub(1 as libc::c_ulong)
-            & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1 as libc::c_ulong),
+            .wrapping_sub(1)
+            & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1),
     ) as ssize_t;
     let vla = control_len_snd as usize;
     let mut control_buf_snd: Vec<libc::c_char> = ::std::vec::from_elem(0, vla);
@@ -633,7 +633,7 @@ pub unsafe fn send_pid_on_socket(mut sockfd: libc::c_int) {
     );
     if loop {
         let __result = sendmsg(sockfd, &mut msg, 0);
-        if !(__result == -(1) && errno!() == EINTR) {
+        if !(__result == -1 && errno!() == EINTR) {
             break __result;
         }
     } < 0
@@ -668,7 +668,7 @@ pub unsafe fn create_pid_socketpair(mut sockets: *mut libc::c_int) {
 }
 
 pub unsafe fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::c_int {
-    let mut recv_buf: [libc::c_char; 1] = [0 as libc::c_char];
+    let mut recv_buf: [libc::c_char; 1] = [0];
     let mut msg: msghdr = std::mem::zeroed();
     let mut iov = iovec {
         iov_base: recv_buf.as_mut_ptr() as *mut libc::c_void,
@@ -676,13 +676,13 @@ pub unsafe fn read_pid_from_socket(mut sockfd: libc::c_int) -> libc::c_int {
     };
     let control_len_rcv = ((::core::mem::size_of::<ucred>() as libc::c_ulong)
         .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
-        .wrapping_sub(1 as libc::c_ulong)
-        & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1 as libc::c_ulong))
+        .wrapping_sub(1)
+        & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1))
     .wrapping_add(
         (::core::mem::size_of::<cmsghdr>() as libc::c_ulong)
             .wrapping_add(::core::mem::size_of::<size_t>() as libc::c_ulong)
-            .wrapping_sub(1 as libc::c_ulong)
-            & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1 as libc::c_ulong),
+            .wrapping_sub(1)
+            & !(::core::mem::size_of::<size_t>() as libc::c_ulong).wrapping_sub(1),
     ) as ssize_t;
     let vla = control_len_rcv as usize;
     let mut control_buf_rcv: Vec<libc::c_char> = ::std::vec::from_elem(0, vla);
@@ -746,7 +746,7 @@ pub unsafe fn readlink_malloc(mut pathname: *const libc::c_char) -> *mut libc::c
         if size > SIZE_MAX.wrapping_div(2) {
             die!(b"Symbolic link target pathname too long\0" as *const u8 as *const libc::c_char);
         }
-        size = (size as libc::c_ulong).wrapping_mul(2 as libc::c_ulong) as size_t as size_t;
+        size = (size as libc::c_ulong).wrapping_mul(2) as size_t as size_t;
         value = xrealloc(value as *mut libc::c_void, size) as *mut libc::c_char;
         n = readlink(pathname, value, size.wrapping_sub(1));
         if n < 0 {
@@ -756,7 +756,7 @@ pub unsafe fn readlink_malloc(mut pathname: *const libc::c_char) -> *mut libc::c
             break;
         }
     }
-    *value.offset(n as isize) = 0 as libc::c_char;
+    *value.offset(n as isize) = 0;
     return (if 0 != 0 {
         value as *mut libc::c_void
     } else {
