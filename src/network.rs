@@ -4,84 +4,58 @@ use ::libc;
 
 use std::ptr::addr_of_mut;
 
-unsafe fn add_rta(
-    header: *mut nlmsghdr,
-    type_0: libc::c_int,
-    size: size_t,
-) -> *mut libc::c_void {
-    let mut rta = 0 as *mut rtattr;
-    let rta_size = (::core::mem::size_of::<rtattr>() as u32)
-        .wrapping_add(RTA_ALIGNTO as u32)
-        .wrapping_sub(1)
-        & !RTA_ALIGNTO.wrapping_sub(1).wrapping_add(size as u32);
-    rta = (header as *mut libc::c_char).offset(
-        (((*header).nlmsg_len)
-            .wrapping_add(NLMSG_ALIGNTO)
-            .wrapping_sub(1)
-            & !NLMSG_ALIGNTO.wrapping_sub(1)) as isize,
-    ) as *mut rtattr;
-    (*rta).rta_type = type_0 as _;
-    (*rta).rta_len = rta_size as libc::c_ushort;
-    (*header).nlmsg_len = (((*header).nlmsg_len)
-        .wrapping_add(NLMSG_ALIGNTO)
-        .wrapping_sub(1)
-        & !NLMSG_ALIGNTO.wrapping_sub(1))
-    .wrapping_add(rta_size as u32);
-    return (rta as *mut libc::c_char).offset(
-        ((::core::mem::size_of::<rtattr>() as libc::c_ulong)
-            .wrapping_add(RTA_ALIGNTO as libc::c_ulong)
-            .wrapping_sub(1)
-            & !RTA_ALIGNTO.wrapping_sub(1) as libc::c_ulong)
-            .wrapping_add(0) as isize,
-    ) as *mut libc::c_void;
+unsafe fn add_rta(header: *mut nlmsghdr, rta_type: libc::c_int, size: usize) -> *mut libc::c_void {
+    let rta_size = ((size_of::<rtattr>()) + RTA_ALIGNTO - 1) & !(RTA_ALIGNTO + size - 1);
+
+    let rta = (header as *mut libc::c_char)
+        .add(((*header).nlmsg_len as usize + NLMSG_ALIGNTO - 1) & !(NLMSG_ALIGNTO - 1))
+        as *mut rtattr;
+
+    (*rta).rta_type = rta_type as _;
+    (*rta).rta_len = rta_size as _;
+    (*header).nlmsg_len = (((*header).nlmsg_len as usize + NLMSG_ALIGNTO - 1)
+        & !(NLMSG_ALIGNTO - 1 + rta_size)) as u32;
+
+    return (rta as *mut libc::c_char)
+        .add((size_of::<rtattr>() + RTA_ALIGNTO - 1) & !(RTA_ALIGNTO - 1))
+        as *mut libc::c_void;
 }
 
-unsafe fn rtnl_send_request(rtnl_fd: libc::c_int, header: *mut nlmsghdr) -> libc::c_int {
+unsafe fn rtnl_send_request(rtnl_fd: std::os::fd::RawFd, header: *mut nlmsghdr) -> libc::c_int {
     let mut dst_addr: MaybeUninit<sockaddr_nl> = MaybeUninit::zeroed();
     *addr_of_mut!((*dst_addr.as_mut_ptr()).nl_family) = libc::AF_NETLINK as _;
     let mut sent: ssize_t = 0;
-    sent = {
-        loop {
-            let __result = sendto(
-                rtnl_fd,
-                header as *mut libc::c_void,
-                (*header).nlmsg_len as size_t,
-                0,
-                dst_addr.as_ptr() as *mut sockaddr,
-                ::core::mem::size_of::<sockaddr_nl>() as socklen_t,
-            );
-            if !(__result == -1 && errno!() == libc::EINTR) {
-                break __result;
-            }
-        }
-    };
+    sent = retry!(sendto(
+        rtnl_fd,
+        header as *mut libc::c_void,
+        (*header).nlmsg_len as size_t,
+        0,
+        dst_addr.as_ptr() as *mut sockaddr,
+        ::core::mem::size_of::<sockaddr_nl>() as socklen_t,
+    ));
     if sent < 0 {
         return -1;
     }
     return 0;
 }
 
-unsafe fn rtnl_read_reply(rtnl_fd: libc::c_int, seq_nr: libc::c_uint) -> libc::c_int {
+unsafe fn rtnl_read_reply(rtnl_fd: std::os::fd::RawFd, seq_nr: libc::c_uint) -> libc::c_int {
     let mut buffer: [libc::c_char; 1024] = [0; 1024];
     let mut received: ssize_t = 0;
     let mut rheader = 0 as *mut nlmsghdr;
     loop {
-        received = loop {
-            let __result = recv(
-                rtnl_fd,
-                buffer.as_mut_ptr() as *mut libc::c_void,
-                ::core::mem::size_of::<[libc::c_char; 1024]>(),
-                0,
-            );
-            if !(__result == -1 && errno!() == libc::EINTR) {
-                break __result;
-            }
-        };
+        received = retry!(recv(
+            rtnl_fd,
+            buffer.as_mut_ptr() as *mut libc::c_void,
+            size_of::<[libc::c_char; 1024]>(),
+            0,
+        ));
         if received < 0 {
             return -1;
         }
+        let mut received = received as usize;
         rheader = buffer.as_mut_ptr() as *mut nlmsghdr;
-        while received >= NLMSG_HDRLEN as isize {
+        while received >= NLMSG_HDRLEN as usize {
             if (*rheader).nlmsg_seq != seq_nr {
                 return -1;
             }
@@ -99,16 +73,10 @@ unsafe fn rtnl_read_reply(rtnl_fd: libc::c_int, seq_nr: libc::c_uint) -> libc::c
             if (*rheader).nlmsg_type as libc::c_int == libc::NLMSG_DONE {
                 return 0;
             }
-            received -= (((*rheader).nlmsg_len)
-                .wrapping_add(NLMSG_ALIGNTO)
-                .wrapping_sub(1)
-                & !NLMSG_ALIGNTO.wrapping_sub(1)) as isize;
-            rheader = (rheader as *mut libc::c_char).offset(
-                (((*rheader).nlmsg_len)
-                    .wrapping_add(NLMSG_ALIGNTO)
-                    .wrapping_sub(1)
-                    & !NLMSG_ALIGNTO.wrapping_sub(1)) as isize,
-            ) as *mut nlmsghdr;
+            received -= ((*rheader).nlmsg_len as usize + NLMSG_ALIGNTO - 1) & !(NLMSG_ALIGNTO - 1);
+            rheader = (rheader as *mut libc::c_char)
+                .add(((*rheader).nlmsg_len as usize + NLMSG_ALIGNTO - 1) & !(NLMSG_ALIGNTO - 1))
+                as *mut nlmsghdr;
         }
     }
 }
@@ -125,22 +93,21 @@ unsafe fn rtnl_do_request(rtnl_fd: libc::c_int, header: *mut nlmsghdr) -> libc::
 
 unsafe fn rtnl_setup_request(
     buffer: *mut libc::c_char,
-    type_0: libc::c_int,
+    req_type: libc::c_int,
     flags: libc::c_int,
     size: size_t,
 ) -> *mut nlmsghdr {
-    let mut header = 0 as *mut nlmsghdr;
-    let len = size.wrapping_add(NLMSG_HDRLEN as _);
+    let len = size + NLMSG_HDRLEN as usize;
     static mut counter: u32 = 0;
     memset(buffer as *mut libc::c_void, 0, len);
-    header = buffer as *mut nlmsghdr;
+    let header = buffer as *mut nlmsghdr;
     (*header).nlmsg_len = len as u32;
-    (*header).nlmsg_type = type_0 as _;
+    (*header).nlmsg_type = req_type as _;
     (*header).nlmsg_flags = (flags | libc::NLM_F_REQUEST) as u16;
-    let fresh0 = counter;
-    counter = counter.wrapping_add(1);
-    (*header).nlmsg_seq = fresh0;
+    (*header).nlmsg_seq = counter;
     (*header).nlmsg_pid = getpid() as u32;
+
+    counter += 1;
     return header;
 }
 
@@ -157,9 +124,10 @@ pub unsafe fn loopback_setup() {
     let mut infomsg = std::ptr::null_mut() as *mut ifinfomsg;
     let mut ip_addr = std::ptr::null_mut() as *mut in_addr;
     *addr_of_mut!((*src_addr.as_mut_ptr()).nl_pid) = getpid() as _;
+
     if_loopback = if_nametoindex(b"lo\0" as *const u8 as *const libc::c_char) as libc::c_int;
     if if_loopback <= 0 {
-        die_with_error!(b"loopback: Failed to look up lo\0" as *const u8 as *const libc::c_char);
+        die_with_error!(c"loopback: Failed to look up lo".as_ptr());
     }
     rtnl_fd = socket(
         libc::PF_NETLINK,
@@ -167,71 +135,61 @@ pub unsafe fn loopback_setup() {
         libc::NETLINK_ROUTE,
     );
     if rtnl_fd < 0 {
-        die_with_error!(
-            b"loopback: Failed to create NETLINK_ROUTE socket\0" as *const u8
-                as *const libc::c_char,
-        );
+        die_with_error!(c"loopback: Failed to create NETLINK_ROUTE socket".as_ptr());
     }
     r = bind(
         rtnl_fd,
         src_addr.as_mut_ptr() as *mut sockaddr,
-        ::core::mem::size_of::<sockaddr_nl>() as libc::c_ulong as socklen_t,
+        size_of::<sockaddr_nl>() as socklen_t,
     );
     if r < 0 {
-        die_with_error!(
-            b"loopback: Failed to bind NETLINK_ROUTE socket\0" as *const u8 as *const libc::c_char,
-        );
+        die_with_error!(c"loopback: Failed to bind NETLINK_ROUTE socket".as_ptr(),);
     }
+
     header = rtnl_setup_request(
         buffer.as_mut_ptr(),
         libc::RTM_NEWADDR as _,
         libc::NLM_F_CREATE | libc::NLM_F_EXCL | libc::NLM_F_ACK,
-        ::core::mem::size_of::<ifaddrmsg>(),
+        size_of::<ifaddrmsg>(),
     );
-    addmsg = (header as *mut libc::c_char).offset(NLMSG_HDRLEN as libc::c_int as isize)
-        as *mut libc::c_void as *mut ifaddrmsg;
+    addmsg = (header as *mut libc::c_char).offset(NLMSG_HDRLEN as isize) as *mut ifaddrmsg;
     (*addmsg).ifa_family = libc::AF_INET as u8;
     (*addmsg).ifa_prefixlen = 8;
     (*addmsg).ifa_flags = libc::IFA_F_PERMANENT as u8;
     (*addmsg).ifa_scope = libc::RT_SCOPE_HOST as libc::c_int as u8;
     (*addmsg).ifa_index = if_loopback as u32;
-    ip_addr = add_rta(
-        header,
-        libc::IFA_LOCAL as libc::c_int,
-        ::core::mem::size_of::<in_addr>(),
-    ) as *mut in_addr;
-    (*ip_addr).s_addr = htonl(libc::INADDR_LOOPBACK as in_addr_t);
+
+    ip_addr = add_rta(header, libc::IFA_LOCAL as libc::c_int, size_of::<in_addr>()) as *mut in_addr;
+    (*ip_addr).s_addr = htonl(libc::INADDR_LOOPBACK);
+
     ip_addr = add_rta(
         header,
         libc::IFA_ADDRESS as libc::c_int,
-        ::core::mem::size_of::<in_addr>(),
+        size_of::<in_addr>(),
     ) as *mut in_addr;
     (*ip_addr).s_addr = htonl(libc::INADDR_LOOPBACK as in_addr_t);
-    assert!(
-        ((*header).nlmsg_len as libc::c_ulong)
-            < ::core::mem::size_of::<[libc::c_char; 1024]>() as libc::c_ulong
-    );
+
+    assert!(((*header).nlmsg_len as usize) < size_of::<[libc::c_char; 1024]>());
     if rtnl_do_request(rtnl_fd, header) != 0 {
-        die_with_error!(b"loopback: Failed RTM_NEWADDR\0" as *const u8 as *const libc::c_char);
+        die_with_error!(c"loopback: Failed RTM_NEWADDR".as_ptr());
     }
     header = rtnl_setup_request(
         buffer.as_mut_ptr(),
         libc::RTM_NEWLINK as _,
         libc::NLM_F_ACK,
-        ::core::mem::size_of::<ifinfomsg>(),
+        size_of::<ifinfomsg>(),
     );
-    infomsg = (header as *mut libc::c_char).offset(NLMSG_HDRLEN as libc::c_int as isize)
-        as *mut libc::c_void as *mut ifinfomsg;
-    (*infomsg).ifi_family = libc::AF_UNSPEC as libc::c_uchar;
+
+    infomsg = (header as *mut libc::c_char).add(NLMSG_HDRLEN as _) as *mut ifinfomsg;
+    (*infomsg).ifi_family = libc::AF_UNSPEC as _;
     (*infomsg).ifi_type = 0;
     (*infomsg).ifi_index = if_loopback;
-    (*infomsg).ifi_flags = libc::IFF_UP as libc::c_uint;
-    (*infomsg).ifi_change = libc::IFF_UP as libc::c_uint;
-    assert!(
-        ((*header).nlmsg_len as libc::c_ulong)
-            < ::core::mem::size_of::<[libc::c_char; 1024]>() as libc::c_ulong
-    );
+    (*infomsg).ifi_flags = libc::IFF_UP as _;
+    (*infomsg).ifi_change = libc::IFF_UP as _;
+
+    assert!(((*header).nlmsg_len as usize) < size_of::<[libc::c_char; 1024]>());
+
     if rtnl_do_request(rtnl_fd, header) != 0 {
-        die_with_error!(b"loopback: Failed RTM_NEWLINK\0" as *const u8 as *const libc::c_char);
+        die_with_error!(c"loopback: Failed RTM_NEWLINK".as_ptr());
     }
 }

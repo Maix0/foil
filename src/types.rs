@@ -1,6 +1,18 @@
 pub use crate::errno;
 use ::libc;
 
+#[macro_export]
+macro_rules! retry {
+    ($e:expr) => {
+        loop {
+            let __result = $e;
+            if !(__result == -1 && errno!() == EINTR) {
+                break __result;
+            }
+        }
+    };
+}
+
 pub const BIND_DEVICES: bind_option_t = 4;
 pub const BIND_MOUNT_ERROR_FIND_DEST_MOUNT: bind_mount_result = 5;
 pub const BIND_MOUNT_ERROR_MOUNT: bind_mount_result = 1;
@@ -51,14 +63,14 @@ pub const IFF_UP: libc::c_uint = 1;
 pub const LONG_MAX: libc::c_long = libc::c_long::MAX;
 pub const MS_NOSYMFOLLOW: libc::c_int = 256;
 pub const NETLINK_ROUTE: libc::c_int = 0;
-pub const NLMSG_ALIGNTO: libc::c_uint = 4;
+pub const NLMSG_ALIGNTO: usize = 4;
 pub const NLMSG_DONE: libc::c_int = 0x3;
 pub const NLMSG_ERROR: libc::c_int = 0x2;
 pub const NLM_F_ACK: libc::c_int = 0x4;
 pub const NLM_F_CREATE: libc::c_int = 0x400;
 pub const NLM_F_EXCL: libc::c_int = 0x200;
 pub const NLM_F_REQUEST: libc::c_int = 0x1;
-pub const RTA_ALIGNTO: libc::c_uint = 4;
+pub const RTA_ALIGNTO: usize = 4;
 pub const RTM_BASE: libc::c_uint = 16;
 pub const RTM_DELACTION: libc::c_uint = 49;
 pub const RTM_DELADDR: libc::c_uint = 21;
