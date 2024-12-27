@@ -791,11 +791,11 @@ pub unsafe fn strappend(dest: *mut StringBuilder, src: *const libc::c_char) {
     let new_offset = xadd((*dest).offset, len);
     if new_offset >= (*dest).size {
         (*dest).size = xmul(xadd(new_offset, 1), 2);
-        (*dest).str_0 =
-            xrealloc((*dest).str_0 as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
+        (*dest).buf =
+            xrealloc((*dest).buf as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
     }
     strncpy(
-        ((*dest).str_0).offset((*dest).offset as isize),
+        ((*dest).buf).offset((*dest).offset as isize),
         src,
         len.wrapping_add(1),
     );
@@ -814,19 +814,19 @@ pub unsafe fn strappend_escape_for_mount_options(
             } else {
                 xmul((*dest).size, 2)
             };
-            (*dest).str_0 =
-                xrealloc((*dest).str_0 as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
+            (*dest).buf =
+                xrealloc((*dest).buf as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
         }
         match *src as libc::c_int {
             0 => {
-                *((*dest).str_0).offset((*dest).offset as isize) = '\0' as i8;
+                *((*dest).buf).offset((*dest).offset as isize) = '\0' as i8;
                 return;
             }
             92 | 44 | 58 => {
                 if unescaped {
                     let fresh1 = (*dest).offset as isize;
                     (*dest).offset = ((*dest).offset).wrapping_add(1);
-                    *((*dest).str_0).offset(fresh1) = '\\' as i8;
+                    *((*dest).buf).offset(fresh1) = '\\' as i8;
                     unescaped = false;
                     continue;
                 }
@@ -835,7 +835,7 @@ pub unsafe fn strappend_escape_for_mount_options(
         }
         let fresh2 = (*dest).offset as isize;
         (*dest).offset = ((*dest).offset).wrapping_add(1);
-        *((*dest).str_0).offset(fresh2) = *src;
+        *((*dest).buf).offset(fresh2) = *src;
         unescaped = true;
         src = src.offset(1);
     }

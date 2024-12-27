@@ -1386,7 +1386,7 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                     3 | 5 | 4 => {
                         let mut sb = {
                             let init = StringBuilder {
-                                str_0: 0 as *mut libc::c_char,
+                                buf: 0 as *mut libc::c_char,
                                 size: 0,
                                 offset: 0,
                             };
@@ -1449,10 +1449,10 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                             0,
                             0,
                             0,
-                            sb.str_0,
+                            sb.buf,
                             dest,
                         );
-                        free(sb.str_0 as *mut libc::c_void);
+                        free(sb.buf as *mut libc::c_void);
                     }
                     16 => {
                         privileged_op(
@@ -1781,7 +1781,7 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         let mut dest_fd_0 = -1;
                         let mut tempfile: [libc::c_char; 16] =
                             *::core::mem::transmute::<&[u8; 16], &mut [libc::c_char; 16]>(
-                                c"/bindfileXXXXXX".as_ptr(),
+                                b"/bindfileXXXXXX\0"
                             );
                         assert!(!dest.is_null());
                         assert!((*op).perms >= 0);

@@ -314,7 +314,7 @@ unsafe fn parse_mountinfo(proc_fd: libc::c_int, root_mount: *const libc::c_char)
     return mount_tab as MountTab;
 }
 
-pub unsafe fn bind_mount(
+pub fn bind_mount(
     proc_fd: libc::c_int,
     src: *const libc::c_char,
     dest: *const libc::c_char,
@@ -326,87 +326,94 @@ pub unsafe fn bind_mount(
     let recursive = options & BIND_RECURSIVE != 0;
 
     if !src.is_null()
-        && mount(
-            src,
-            dest,
-            std::ptr::null_mut(),
-            MS_SILENT | MS_BIND | if recursive { MS_REC } else { 0 },
-            std::ptr::null_mut(),
-        ) != 0
+        && unsafe {
+            mount(
+                src,
+                dest,
+                std::ptr::null_mut(),
+                libc::MS_SILENT
+                    | libc::MS_BIND
+                    | recursive.then_some(libc::MS_REC).unwrap_or_default(),
+                std::ptr::null_mut(),
+            )
+        } != 0
     {
         return BIND_MOUNT_ERROR_MOUNT;
     }
-    let resolved_dest = realpath(dest, std::ptr::null_mut());
+    let resolved_dest = unsafe { realpath(dest, std::ptr::null_mut()) };
     if resolved_dest.is_null() {
         return BIND_MOUNT_ERROR_REALPATH_DEST;
     }
-    let dest_fd = retry!(open(resolved_dest, 0o10000000 | 0o2000000));
+    let dest_fd = retry!(unsafe { open(resolved_dest, libc::O_PATH | libc::O_CLOEXEC) });
     if dest_fd < 0 {
         if !failing_path.is_null() {
-            *failing_path = resolved_dest;
+            unsafe { *failing_path = resolved_dest };
         }
         return BIND_MOUNT_ERROR_REOPEN_DEST;
     }
-    let dest_proc = xasprintf(
-        c"/proc/self/fd/%d".as_ptr(),
-        dest_fd,
-    );
-    let oldroot_dest_proc = get_oldroot_path(dest_proc);
-    let kernel_case_combination = readlink_malloc(oldroot_dest_proc);
+    let dest_proc = unsafe { xasprintf(c"/proc/self/fd/%d".as_ptr(), dest_fd) };
+    let oldroot_dest_proc = unsafe { get_oldroot_path(dest_proc) };
+    let kernel_case_combination = unsafe { readlink_malloc(oldroot_dest_proc) };
     if kernel_case_combination.is_null() {
         if !failing_path.is_null() {
-            *failing_path = resolved_dest;
+            unsafe { *failing_path = resolved_dest };
         }
         return BIND_MOUNT_ERROR_READLINK_DEST_PROC_FD;
     }
-    let mount_tab = parse_mountinfo(proc_fd, kernel_case_combination);
-    if ((*mount_tab).mountpoint).is_null() {
+    let mount_tab = unsafe { parse_mountinfo(proc_fd, kernel_case_combination) };
+    if unsafe { ((*mount_tab).mountpoint).is_null() } {
         if !failing_path.is_null() {
-            *failing_path = kernel_case_combination;
+            unsafe {
+                *failing_path = kernel_case_combination;
+            }
         }
-        errno!() = EINVAL;
+        unsafe { errno!() = EINVAL };
         return BIND_MOUNT_ERROR_FIND_DEST_MOUNT;
     }
-    assert!(path_equal((*mount_tab).mountpoint, kernel_case_combination,));
-    let mut current_flags = (*mount_tab).options;
+    assert!(unsafe { path_equal((*mount_tab).mountpoint, kernel_case_combination,) });
+    let mut current_flags = unsafe { (*mount_tab).options };
     let mut new_flags = current_flags
         | (if devices { 0 } else { MS_NODEV })
         | MS_NOSUID
         | (if readonly { MS_RDONLY } else { 0 });
     if new_flags != current_flags
-        && mount(
-            c"none".as_ptr(),
-            resolved_dest,
-            std::ptr::null_mut(),
-            MS_SILENT | MS_BIND | MS_REMOUNT | new_flags,
-            std::ptr::null_mut(),
-        ) != 0
+        && unsafe {
+            mount(
+                c"none".as_ptr(),
+                resolved_dest,
+                std::ptr::null_mut(),
+                MS_SILENT | MS_BIND | MS_REMOUNT | new_flags,
+                std::ptr::null_mut(),
+            )
+        } != 0
     {
         if !failing_path.is_null() {
-            *failing_path = resolved_dest;
+            unsafe { *failing_path = resolved_dest };
         }
         return BIND_MOUNT_ERROR_REMOUNT_DEST;
     }
     if recursive {
         let mut i = 1;
-        while !((*mount_tab.add(i)).mountpoint).is_null() {
-            current_flags = (*mount_tab.add(i)).options;
+        while unsafe { !((*mount_tab.add(i)).mountpoint).is_null() } {
+            current_flags = unsafe { (*mount_tab.add(i)).options };
             new_flags = current_flags
                 | if devices { 0 } else { MS_NODEV }
                 | MS_NOSUID
                 | if readonly { MS_RDONLY } else { 0 };
             if new_flags != current_flags
-                && mount(
-                    c"none".as_ptr(),
-                    (*mount_tab.add(i)).mountpoint,
-                    std::ptr::null_mut(),
-                    MS_SILENT | MS_BIND | MS_REMOUNT | new_flags,
-                    std::ptr::null_mut(),
-                ) != 0
-                && errno!() != EACCES
+                && unsafe {
+                    mount(
+                        c"none".as_ptr(),
+                        (*mount_tab.add(i)).mountpoint,
+                        std::ptr::null_mut(),
+                        MS_SILENT | MS_BIND | MS_REMOUNT | new_flags,
+                        std::ptr::null_mut(),
+                    )
+                } != 0
+                && unsafe { errno!() != EACCES }
             {
                 if !failing_path.is_null() {
-                    *failing_path = xstrdup((*mount_tab.add(i)).mountpoint);
+                    unsafe { *failing_path = xstrdup((*mount_tab.add(i)).mountpoint) };
                 }
                 return BIND_MOUNT_ERROR_REMOUNT_SUBMOUNT;
             }

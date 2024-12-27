@@ -408,7 +408,7 @@ pub type cap_user_data_t = *mut __user_cap_data_struct;
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct StringBuilder {
-    pub str_0: *mut libc::c_char,
+    pub buf: *mut libc::c_char,
     pub size: size_t,
     pub offset: size_t,
 }
@@ -546,4 +546,4 @@ pub const CAP_CHECKPOINT_RESTORE: libc::c_int = 40;
 pub const CAP_LAST_CAP: libc::c_int = 40;
 
 pub const PACKAGE_STRING: [libc::c_char; 18] =
-    unsafe { *::core::mem::transmute::<&[u8; 18], &[libc::c_char; 18]>(c"bubblewrap 0.11.0".as_ptr()) };
+    unsafe { *::core::mem::transmute::<&[u8; 18], &[libc::c_char; 18]>(b"bubblewrap 0.11.0\0") };
