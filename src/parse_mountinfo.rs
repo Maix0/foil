@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::io::BufReader;
+use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +22,7 @@ struct RMountInfoLine {
 #[derive(Debug, Clone)]
 pub struct RMountInfo {
     pub mountpoint: PathBuf,
-    pub options: u64,
+    pub options: nix::mount::MsFlags,
 }
 
 /// This function takes a string, and returns the same string but with every \XXX converted from
@@ -78,21 +77,22 @@ fn has_path_prefix_rust(path: impl AsRef<Path>, prefix: impl AsRef<Path>) -> boo
     has_path_prefix_inner(path.as_ref(), prefix.as_ref())
 }
 
-fn decode_mountoptions_rust(opts: impl AsRef<BStr>) -> u64 {
-    fn decode_mountoptions_inner(opts: &BStr) -> u64 {
-        static FLAGS: phf::Map<&'static [u8], u64> = phf::phf_map! {
-            b"ro" => libc::MS_RDONLY,
-            b"nosuid" => libc::MS_NOSUID,
-            b"nodev" => libc::MS_NODEV,
-            b"noexec" => libc::MS_NOEXEC,
-            b"noatime" => libc::MS_NOATIME,
-            b"nodiratime" => libc::MS_NODIRATIME,
-            b"relatime" => libc::MS_RELATIME,
+fn decode_mountoptions_rust(opts: impl AsRef<BStr>) -> nix::mount::MsFlags {
+    fn decode_mountoptions_inner(opts: &BStr) -> nix::mount::MsFlags {
+        use nix::mount::MsFlags;
+        static FLAGS: phf::Map<&'static [u8], MsFlags> = phf::phf_map! {
+            b"ro" => MsFlags::MS_RDONLY,
+            b"nosuid" => MsFlags::MS_NOSUID,
+            b"nodev" => MsFlags::MS_NODEV,
+            b"noexec" => MsFlags::MS_NOEXEC,
+            b"noatime" => MsFlags::MS_NOATIME,
+            b"nodiratime" => MsFlags::MS_NODIRATIME,
+            b"relatime" => MsFlags::MS_RELATIME,
         };
-        let mut out = 0;
+        let mut out = MsFlags::empty();
 
         opts.split_str(",")
-            .filter_map(|tok| FLAGS.get(tok))
+            .filter_map(|tok| FLAGS.get(tok).copied())
             .for_each(|flag| out |= flag);
 
         out

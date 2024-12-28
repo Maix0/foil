@@ -1,23 +1,20 @@
-use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, OsString};
-use std::fs::File;
-use std::io::BufReader;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::os::unix::ffi::{OsStrExt, OsStringExt as _};
-use std::path::{Path, PathBuf};
+use std::ops::Not;
+use std::os::fd::RawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
+use std::str::FromStr;
 
-use bstr::ByteSlice;
-use bstr::{io::BufReadExt, BStr, BString};
 use nix::fcntl::OFlag;
 use nix::mount::MsFlags;
 use nix::sys::stat::Mode;
 
-use crate::{nix_retry, retry, types::*};
+use crate::{nix_retry, types::*};
 
 pub fn bind_mount(
-    proc_fd: libc::c_int,
-    src: *const libc::c_char,
-    dest: *const libc::c_char,
+    proc_fd: RawFd,
+    src: Option<&CStr>,
+    dest: &CStr,
     options: bind_option_t,
     _failing_path: *mut *mut libc::c_char,
 ) -> bind_mount_result {
@@ -30,18 +27,16 @@ pub fn bind_mount(
     let devices = options & BIND_DEVICES != 0;
     let recursive = options & BIND_RECURSIVE != 0;
 
-    if !src.is_null() {
-        let src = unsafe { CStr::from_ptr(src) };
-        let dest = unsafe { CStr::from_ptr(dest) };
+    if let Some(src) = src {
         if nix::mount::mount(
             Some(src),
             dest,
             Option::<&CStr>::None,
-            MsFlags::from_bits_truncate(
-                libc::MS_SILENT
-                    | libc::MS_BIND
-                    | recursive.then_some(libc::MS_REC).unwrap_or_default(),
-            ),
+            MsFlags::MS_SILENT
+                | MsFlags::MS_BIND
+                | recursive
+                    .then_some(MsFlags::MS_REC)
+                    .unwrap_or_else(MsFlags::empty),
             Option::<&CStr>::None,
         )
         .is_err()
@@ -50,9 +45,8 @@ pub fn bind_mount(
         }
     }
 
-    let src = unsafe { CStr::from_ptr(src) };
-    let dest = unsafe { CStr::from_ptr(dest) };
-    let resolved_dest = unsafe { libc::realpath(dest.as_ptr(), std::ptr::null_mut()) }; //unsafe { realpath(dest, std::ptr::null_mut()) };
+    //unsafe { realpath(dest, std::ptr::null_mut()) };
+    let resolved_dest = unsafe { libc::realpath(dest.as_ptr(), std::ptr::null_mut()) };
     if resolved_dest.is_null() {
         return BIND_MOUNT_ERROR_REALPATH_DEST;
     }
@@ -68,56 +62,65 @@ pub fn bind_mount(
     let dest_fd = dest_fd.unwrap();
 
     // unsafe { xasprintf(c"/proc/self/fd/%d".as_ptr(), dest_fd) };
-    let dest_proc =
-        CString::from_vec_with_nul(format!("/proc/self/fd/{dest_fd}\0").into_bytes()).unwrap();
-    let oldroot_dest_proc = unsafe { get_oldroot_path(dest_proc.as_ptr()) };
-    let kernel_case_combination = unsafe { readlink_malloc(oldroot_dest_proc) };
-    if kernel_case_combination.is_null() {
+    let dest_proc = std::path::PathBuf::from(format!("/proc/self/fd/{dest_fd}"));
+    let oldroot_dest_proc = {
+        let mut out = OsString::from("/oldroot");
+        out.push(dest_proc.as_os_str());
+        std::path::PathBuf::from(out)
+    };
+    //unsafe { get_oldroot_path(dest_proc.as_ptr()) };
+    let kernel_case_combination = nix::fcntl::readlink(&oldroot_dest_proc).map(PathBuf::from);
+    if kernel_case_combination.is_err() {
         return BIND_MOUNT_ERROR_READLINK_DEST_PROC_FD;
     }
-    let kernel_case_combination_cstr = unsafe { CStr::from_ptr(kernel_case_combination) };
+    let kernel_case_combination = kernel_case_combination.unwrap();
 
-    let mount_tab_box = crate::parse_mountinfo::parse_mountinfo(
-        proc_fd,
-        OsStr::from_bytes(kernel_case_combination_cstr.to_bytes()),
-    );
+    let mount_tab = crate::parse_mountinfo::parse_mountinfo(proc_fd, &kernel_case_combination);
 
-    let mount_tab = (*mount_tab_box).as_ptr();
-    assert!(unsafe {
-        (*mount_tab).mountpoint.as_os_str()
-            == OsStr::from_bytes(kernel_case_combination_cstr.to_bytes())
-    });
-    let mut current_flags = mount_tab_box[0].options;
+    assert!(!mount_tab.is_empty());
+    assert!(mount_tab[0].mountpoint.as_os_str() == kernel_case_combination);
+
+    let mut current_flags = mount_tab[0].options;
     let mut new_flags = current_flags
-        | (if devices { 0 } else { MS_NODEV })
-        | MS_NOSUID
-        | (if readonly { MS_RDONLY } else { 0 });
-    if new_flags != current_flags
-        && unsafe {
-            mount(
-                c"none".as_ptr(),
-                resolved_dest.as_ptr(),
-                std::ptr::null_mut(),
-                MS_SILENT | MS_BIND | MS_REMOUNT | new_flags,
-                std::ptr::null_mut(),
-            )
-        } != 0
-    {
-        return BIND_MOUNT_ERROR_REMOUNT_DEST;
+        | MsFlags::MS_NOSUID
+        | devices
+            .not()
+            .then_some(MsFlags::MS_NODEV)
+            .unwrap_or_else(MsFlags::empty)
+        | readonly
+            .then_some(MsFlags::MS_RDONLY)
+            .unwrap_or_else(MsFlags::empty);
+    if new_flags != current_flags {
+        if nix::mount::mount(
+            Some("none"),
+            resolved_dest,
+            Option::<&CStr>::None,
+            MsFlags::MS_SILENT | MsFlags::MS_BIND | MsFlags::MS_REMOUNT | new_flags,
+            Option::<&CStr>::None,
+        )
+        .is_err()
+        {
+            return BIND_MOUNT_ERROR_REMOUNT_DEST;
+        }
     }
     if recursive {
-        for elem in mount_tab_box.iter().skip(1) {
+        for elem in mount_tab.iter().skip(1) {
             current_flags = elem.options;
             new_flags = current_flags
-                | if devices { 0 } else { MS_NODEV }
-                | MS_NOSUID
-                | if readonly { MS_RDONLY } else { 0 };
+                | MsFlags::MS_NOSUID
+                | devices
+                    .not()
+                    .then_some(MsFlags::MS_NODEV)
+                    .unwrap_or_else(MsFlags::empty)
+                | readonly
+                    .then_some(MsFlags::MS_RDONLY)
+                    .unwrap_or_else(MsFlags::empty);
             if new_flags != current_flags {
                 let res = nix::mount::mount(
-                    Some(c"none"),
+                    Some("none"),
                     &elem.mountpoint,
                     Option::<&CStr>::None,
-                    MsFlags::from_bits_truncate(MS_SILENT | MS_BIND | MS_REMOUNT | new_flags),
+                    MsFlags::MS_SILENT | MsFlags::MS_BIND | MsFlags::MS_REMOUNT | new_flags,
                     Option::<&CStr>::None,
                 );
 
