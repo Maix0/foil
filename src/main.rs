@@ -11,6 +11,7 @@ extern crate libc;
 pub mod bind_mount;
 pub mod bubblewrap;
 pub mod network;
+pub mod parse_mountinfo;
 pub mod types;
 pub mod utils;
 
@@ -23,6 +24,18 @@ pub mod _macros {
     macro_rules! errno {
         () => {
             *$crate::_macros::__errno_location()
+        };
+    }
+
+    #[macro_export]
+    macro_rules! nix_retry {
+        ($e:expr) => {
+            loop {
+                let result = $e;
+                if !matches!(&result, ::core::result::Result::Err(::nix::errno::Errno::EINTR)) {
+                    break result;
+                }
+            }
         };
     }
 }
