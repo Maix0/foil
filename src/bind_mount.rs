@@ -11,6 +11,30 @@ use nix::sys::stat::Mode;
 
 use crate::{nix_retry, types::*};
 
+/// Will return an error on invalid Paths.
+/// Will return Ok(None) in case of [`libc::realpath`] returing nullptr
+/// Otherwise in case of success it will return the value as a CString. This will make another
+/// allocation since we can't make sure that the global_allocator is using the same as libc's
+/// allocator. Meaning we have to allocate and copy the result
+fn realpath_wrapper<P: nix::NixPath + ?Sized>(
+    path: &P,
+) -> Result<Option<CString>, nix::errno::Errno> {
+    // SAFETY: This is safe because with NixPath we can't get a nullptr. It is also a path-like
+    // object
+    path.with_nix_path(|p| unsafe { libc::realpath(p.as_ptr(), std::ptr::null_mut()) })
+        .map(|ptr| {
+            if ptr.is_null() {
+                None
+            } else {
+                // SAFETY: this is safe because ptr is not null and points to something that was
+                // malloc'ed by the libc
+                let cstring = CString::from(unsafe { CStr::from_ptr(ptr) });
+                unsafe { libc::free(ptr.cast()) };
+                Some(cstring)
+            }
+        })
+}
+
 pub fn bind_mount(
     proc_fd: RawFd,
     src: Option<&CStr>,
@@ -46,13 +70,13 @@ pub fn bind_mount(
     }
 
     //unsafe { realpath(dest, std::ptr::null_mut()) };
-    let resolved_dest = unsafe { libc::realpath(dest.as_ptr(), std::ptr::null_mut()) };
-    if resolved_dest.is_null() {
+    let resolved_dest = realpath_wrapper(dest);
+    if resolved_dest.is_err() || resolved_dest.as_ref().unwrap().is_none() {
         return BIND_MOUNT_ERROR_REALPATH_DEST;
     }
-    let resolved_dest = unsafe { CStr::from_ptr(resolved_dest) };
+    let resolved_dest = resolved_dest.unwrap().unwrap();
     let dest_fd = nix_retry!(nix::fcntl::open(
-        resolved_dest,
+        resolved_dest.as_c_str(),
         OFlag::O_PATH | OFlag::O_CLOEXEC,
         Mode::empty(),
     )); //retry!(unsafe { open(resolved_dest.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) });
@@ -64,7 +88,7 @@ pub fn bind_mount(
     // unsafe { xasprintf(c"/proc/self/fd/%d".as_ptr(), dest_fd) };
     let dest_proc = std::path::PathBuf::from(format!("/proc/self/fd/{dest_fd}"));
     let oldroot_dest_proc = {
-        let mut out = OsString::from("/oldroot");
+        let mut out = OsString::from("/oldroot/");
         out.push(dest_proc.as_os_str());
         std::path::PathBuf::from(out)
     };
@@ -93,7 +117,7 @@ pub fn bind_mount(
     if new_flags != current_flags {
         if nix::mount::mount(
             Some("none"),
-            resolved_dest,
+            resolved_dest.as_c_str(),
             Option::<&CStr>::None,
             MsFlags::MS_SILENT | MsFlags::MS_BIND | MsFlags::MS_REMOUNT | new_flags,
             Option::<&CStr>::None,

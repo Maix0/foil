@@ -50,7 +50,7 @@ fn unescape(s: impl AsRef<BStr>) -> Option<BString> {
     unescape_inner(s.as_ref())
 }
 
-fn has_path_prefix_rust(path: impl AsRef<Path>, prefix: impl AsRef<Path>) -> bool {
+fn has_path_prefix(path: impl AsRef<Path>, prefix: impl AsRef<Path>) -> bool {
     fn has_path_prefix_inner(path: &Path, prefix: &Path) -> bool {
         let mut path = path.components();
         let mut prefix = prefix.components();
@@ -77,7 +77,7 @@ fn has_path_prefix_rust(path: impl AsRef<Path>, prefix: impl AsRef<Path>) -> boo
     has_path_prefix_inner(path.as_ref(), prefix.as_ref())
 }
 
-fn decode_mountoptions_rust(opts: impl AsRef<BStr>) -> nix::mount::MsFlags {
+fn decode_mountoptions(opts: impl AsRef<BStr>) -> nix::mount::MsFlags {
     fn decode_mountoptions_inner(opts: &BStr) -> nix::mount::MsFlags {
         use nix::mount::MsFlags;
         static FLAGS: phf::Map<&'static [u8], MsFlags> = phf::phf_map! {
@@ -101,16 +101,16 @@ fn decode_mountoptions_rust(opts: impl AsRef<BStr>) -> nix::mount::MsFlags {
     decode_mountoptions_inner(opts.as_ref())
 }
 
-fn collect_mounts_rust(info: &mut Vec<RMountInfo>, lines: &[RMountInfoLine], this: usize) {
+fn collect_mounts(info: &mut Vec<RMountInfo>, lines: &[RMountInfoLine], this: usize) {
     if !lines[this].covered {
         info.push(RMountInfo {
             mountpoint: lines[this].mountpoint.clone(),
-            options: decode_mountoptions_rust(&lines[this].options),
+            options: decode_mountoptions(&lines[this].options),
         });
     }
     let mut child = lines[this].first_child;
     while let Some(child_id) = child {
-        collect_mounts_rust(info, lines, child_id);
+        collect_mounts(info, lines, child_id);
         child = lines[child_id].next_sibling;
     }
 }
@@ -190,7 +190,7 @@ pub fn parse_mountinfo(proc_fd: RawFd, root_mount: impl AsRef<OsStr>) -> Box<[RM
                 continue;
             };
 
-            if !has_path_prefix_rust(&mounts[this].mountpoint, root_mount) {
+            if !has_path_prefix(&mounts[this].mountpoint, root_mount) {
                 continue;
             }
 
@@ -216,7 +216,7 @@ pub fn parse_mountinfo(proc_fd: RawFd, root_mount: impl AsRef<OsStr>) -> Box<[RM
                 /* If this mountpoint is a path prefix of the sibling,
                  * say this->mp=/foo/bar and sibling->mp=/foo, then it is
                  * covered by the sibling, and we drop it. */
-                if has_path_prefix_rust(&mounts[this].mountpoint, &mounts[sibling_].mountpoint) {
+                if has_path_prefix(&mounts[this].mountpoint, &mounts[sibling_].mountpoint) {
                     covered = true;
                     break;
                 }
@@ -224,7 +224,7 @@ pub fn parse_mountinfo(proc_fd: RawFd, root_mount: impl AsRef<OsStr>) -> Box<[RM
                 /* If the sibling is a path prefix of this mount point,
                  * say this->mp=/foo and sibling->mp=/foo/bar, then the sibling
                  * is covered, and we drop it. */
-                if has_path_prefix_rust(&mounts[sibling_].mountpoint, &mounts[this].mountpoint) {
+                if has_path_prefix(&mounts[sibling_].mountpoint, &mounts[this].mountpoint) {
                     mounts[to_sibling].next_sibling = mounts[sibling_].next_sibling;
                 } else {
                     change = FillSibling::NextSibling;
@@ -246,7 +246,7 @@ pub fn parse_mountinfo(proc_fd: RawFd, root_mount: impl AsRef<OsStr>) -> Box<[RM
         );
         let mut out = Vec::new();
         //dbg!(&mounts);
-        collect_mounts_rust(&mut out, &mounts, root);
+        collect_mounts(&mut out, &mounts, root);
 
         out.into_boxed_slice()
     }
