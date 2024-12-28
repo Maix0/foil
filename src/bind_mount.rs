@@ -1,13 +1,13 @@
-use std::ffi::{CStr, CString, OsStr, OsString};
+use std::ffi::{CStr, CString, OsString};
 use std::ops::Not;
 use std::os::fd::RawFd;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use nix::fcntl::OFlag;
 use nix::mount::MsFlags;
 use nix::sys::stat::Mode;
+use nix::NixPath;
 
 use crate::{nix_retry, types::*};
 
@@ -35,18 +35,23 @@ fn realpath_wrapper<P: nix::NixPath + ?Sized>(
         })
 }
 
-pub fn bind_mount(
+#[derive(Debug, Clone)]
+pub enum BindMountError {
+    Mount,
+    RealpathDest,
+    ReopenDest(OsString),
+    ReadlinkDestProcFd(OsString),
+    FindDestMount(OsString),
+    RemountDest(OsString),
+    RemountSubmount(OsString),
+}
+
+pub fn bind_mount<'a, 'b, P1: ?Sized + NixPath, P2: ?Sized + NixPath>(
     proc_fd: RawFd,
-    src: Option<&CStr>,
-    dest: &CStr,
+    src: Option<&'a P1>,
+    dest: &'b P2,
     options: bind_option_t,
-    _failing_path: *mut *mut libc::c_char,
-) -> bind_mount_result {
-    if !_failing_path.is_null() {
-        unsafe {
-            _failing_path.write(std::ptr::null_mut());
-        }
-    }
+) -> Result<(), BindMountError> {
     let readonly = options & BIND_READONLY != 0;
     let devices = options & BIND_DEVICES != 0;
     let recursive = options & BIND_RECURSIVE != 0;
@@ -65,43 +70,50 @@ pub fn bind_mount(
         )
         .is_err()
         {
-            return BIND_MOUNT_ERROR_MOUNT;
+            return Err(BindMountError::Mount);
         }
     }
 
-    //unsafe { realpath(dest, std::ptr::null_mut()) };
     let resolved_dest = realpath_wrapper(dest);
     if resolved_dest.is_err() || resolved_dest.as_ref().unwrap().is_none() {
-        return BIND_MOUNT_ERROR_REALPATH_DEST;
+        return Err(BindMountError::RealpathDest);
     }
     let resolved_dest = resolved_dest.unwrap().unwrap();
     let dest_fd = nix_retry!(nix::fcntl::open(
         resolved_dest.as_c_str(),
         OFlag::O_PATH | OFlag::O_CLOEXEC,
         Mode::empty(),
-    )); //retry!(unsafe { open(resolved_dest.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) });
+    ));
     if dest_fd.is_err() {
-        return BIND_MOUNT_ERROR_REOPEN_DEST;
+        return Err(BindMountError::ReopenDest(OsString::from_vec(
+            resolved_dest.into_bytes(),
+        )));
     }
     let dest_fd = dest_fd.unwrap();
 
-    // unsafe { xasprintf(c"/proc/self/fd/%d".as_ptr(), dest_fd) };
     let dest_proc = std::path::PathBuf::from(format!("/proc/self/fd/{dest_fd}"));
     let oldroot_dest_proc = {
         let mut out = OsString::from("/oldroot/");
         out.push(dest_proc.as_os_str());
         std::path::PathBuf::from(out)
     };
-    //unsafe { get_oldroot_path(dest_proc.as_ptr()) };
     let kernel_case_combination = nix::fcntl::readlink(&oldroot_dest_proc).map(PathBuf::from);
     if kernel_case_combination.is_err() {
-        return BIND_MOUNT_ERROR_READLINK_DEST_PROC_FD;
+        return Err(BindMountError::ReadlinkDestProcFd(OsString::from_vec(
+            resolved_dest.into_bytes(),
+        )));
     }
     let kernel_case_combination = kernel_case_combination.unwrap();
 
     let mount_tab = crate::parse_mountinfo::parse_mountinfo(proc_fd, &kernel_case_combination);
 
     assert!(!mount_tab.is_empty());
+    if mount_tab[0].mountpoint.as_os_str() != kernel_case_combination {
+        return Err(BindMountError::FindDestMount(
+            kernel_case_combination.into_os_string(),
+        ));
+    }
+
     assert!(mount_tab[0].mountpoint.as_os_str() == kernel_case_combination);
 
     let mut current_flags = mount_tab[0].options;
@@ -124,7 +136,9 @@ pub fn bind_mount(
         )
         .is_err()
         {
-            return BIND_MOUNT_ERROR_REMOUNT_DEST;
+            return Err(BindMountError::ReadlinkDestProcFd(OsString::from_vec(
+                resolved_dest.into_bytes(),
+            )));
         }
     }
     if recursive {
@@ -149,10 +163,13 @@ pub fn bind_mount(
                 );
 
                 if let Err(nix::errno::Errno::EACCES) = res {
-                    return BIND_MOUNT_ERROR_REMOUNT_SUBMOUNT;
+                    return Err(BindMountError::ReadlinkDestProcFd(
+                        elem.mountpoint.clone().into_os_string(),
+                    ));
                 }
             }
         }
     }
-    return BIND_MOUNT_SUCCESS;
+
+    Ok(())
 }

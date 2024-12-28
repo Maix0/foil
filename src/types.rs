@@ -445,7 +445,7 @@ macro_rules! die_with_error {
 macro_rules! die_with_bind_result {
     ($($e:expr),* $(,)?) => {
         let v = ($($e, )*);
-        panic!("bind result: {:?}", (v.0));
+        panic!("bind result: {:?}", v);
     };
 }
 

@@ -1038,43 +1038,39 @@ unsafe fn privileged_op(
     match op {
         0 => {}
         7 => {
-            bind_result = bind_mount(
+            let bind_result = bind_mount(
                 proc_fd,
-                None,
+                Option::<&str>::None,
                 CStr::from_ptr(arg2),
                 BIND_READONLY,
-                &mut failing_path,
             );
-            if bind_result as libc::c_uint != BIND_MOUNT_SUCCESS as libc::c_int as libc::c_uint {
+            if let Err(e) = &bind_result {
                 die_with_bind_result!(
-                    bind_result,
+                    &bind_result,
                     errno!(),
-                    failing_path,
+                    e,
                     c"Can't remount readonly on %s".as_ptr(),
                     arg2,
                 );
             }
-            assert!(failing_path.is_null());
         }
         1 => {
-            bind_result = bind_mount(
+            let bind_result = bind_mount(
                 proc_fd,
                 Some(CStr::from_ptr(arg1)),
                 CStr::from_ptr(arg2),
                 (BIND_RECURSIVE as libc::c_int as libc::c_uint | flags) as bind_option_t,
-                &mut failing_path,
             );
-            if bind_result as libc::c_uint != BIND_MOUNT_SUCCESS as libc::c_int as libc::c_uint {
+            if let Err(e) = &bind_result {
                 die_with_bind_result!(
-                    bind_result,
+                    &bind_result,
                     errno!(),
-                    failing_path,
+                    e,
                     c"Can't bind mount %s on %s".as_ptr(),
                     arg1,
                     arg2,
                 );
             }
-            assert!(failing_path.is_null());
         }
         3 => {
             if mount(
