@@ -1,18 +1,12 @@
 use crate::types::*;
 use crate::*;
 use ::libc;
-use neli::consts::nl::{NlType, NlmF, NlmFFlags};
-use neli::consts::rtnl::{Arphrd, Ifa, IfaF, IfaFFlags, Iff, IffFlags, Rtm};
-use neli::nl::Nlmsghdr;
-use neli::rtnl::{Ifaddrmsg, Ifinfomsg};
-use neli::socket::NlSocket;
+use neli::consts::rtnl::{Ifa, IfaF, IfaFFlags};
+use neli::rtnl::Ifaddrmsg;
 use neli::types::{Buffer, RtBuffer};
-use neli::{FromBytes, Size, ToBytes};
 use nix::sys::socket::{AddressFamily, MsgFlags, NetlinkAddr, SockFlag, SockProtocol, SockType};
 
-use std::io::Cursor;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::ptr::addr_of_mut;
+use std::os::fd::{AsRawFd, RawFd};
 
 #[repr(C)]
 #[derive(Debug)]

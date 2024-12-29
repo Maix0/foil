@@ -962,8 +962,8 @@ unsafe fn privileged_op(
     arg1: *const libc::c_char,
     arg2: *const libc::c_char,
 ) {
-    let mut bind_result = BIND_MOUNT_SUCCESS;
-    let mut failing_path = std::ptr::null_mut() as *mut libc::c_char;
+    let bind_result = BIND_MOUNT_SUCCESS;
+    let failing_path = std::ptr::null_mut() as *mut libc::c_char;
     if privileged_op_socket != -1 {
         let mut buffer: [u32; 2048] = [0; 2048];
         let op_buffer = buffer.as_mut_ptr() as *mut PrivSepOp;
