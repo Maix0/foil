@@ -3207,7 +3207,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     close(child_wait_fd);
     switch_to_user_with_privs();
     if opt_unshare_net {
-        loopback_setup();
+        loopback_setup().unwrap();
     }
     ns_uid = opt_sandbox_uid;
     ns_gid = opt_sandbox_gid;

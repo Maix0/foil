@@ -30,7 +30,7 @@
       in
         pkgs.mkShell {
           packages =
-            [rust_bin pkgs.fastmod pkgs.libcap]
+            [rust_bin pkgs.fastmod pkgs.libcap pkgs.cargo-edit]
             ++ (packageIf "cargo-semver-checks" (p: p.packages.${system}.default))
             ++ (packageIf "cargo-workspace" (p: p.packages.${system}.default));
 

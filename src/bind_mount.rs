@@ -75,9 +75,10 @@ pub fn bind_mount<'a, 'b, P1: ?Sized + NixPath, P2: ?Sized + NixPath>(
     }
 
     let resolved_dest = realpath_wrapper(dest);
-    if resolved_dest.is_err() || resolved_dest.as_ref().unwrap().is_none() {
+    if matches!(resolved_dest, Err(_) | Ok(None)) {
         return Err(BindMountError::RealpathDest);
     }
+
     let resolved_dest = resolved_dest.unwrap().unwrap();
     let dest_fd = nix_retry!(nix::fcntl::open(
         resolved_dest.as_c_str(),
@@ -107,14 +108,11 @@ pub fn bind_mount<'a, 'b, P1: ?Sized + NixPath, P2: ?Sized + NixPath>(
 
     let mount_tab = crate::parse_mountinfo::parse_mountinfo(proc_fd, &kernel_case_combination);
 
-    assert!(!mount_tab.is_empty());
-    if mount_tab[0].mountpoint.as_os_str() != kernel_case_combination {
+    if mount_tab.is_empty() || mount_tab[0].mountpoint.as_os_str() != kernel_case_combination {
         return Err(BindMountError::FindDestMount(
             kernel_case_combination.into_os_string(),
         ));
     }
-
-    assert!(mount_tab[0].mountpoint.as_os_str() == kernel_case_combination);
 
     let mut current_flags = mount_tab[0].options;
     let mut new_flags = current_flags

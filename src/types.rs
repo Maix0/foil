@@ -63,14 +63,12 @@ pub const IFF_UP: libc::c_uint = 1;
 pub const LONG_MAX: libc::c_long = libc::c_long::MAX;
 pub const MS_NOSYMFOLLOW: libc::c_int = 256;
 pub const NETLINK_ROUTE: libc::c_int = 0;
-pub const NLMSG_ALIGNTO: usize = 4;
 pub const NLMSG_DONE: libc::c_int = 0x3;
 pub const NLMSG_ERROR: libc::c_int = 0x2;
 pub const NLM_F_ACK: libc::c_int = 0x4;
 pub const NLM_F_CREATE: libc::c_int = 0x400;
 pub const NLM_F_EXCL: libc::c_int = 0x200;
 pub const NLM_F_REQUEST: libc::c_int = 0x1;
-pub const RTA_ALIGNTO: usize = 4;
 pub const RTM_BASE: libc::c_uint = 16;
 pub const RTM_DELACTION: libc::c_uint = 49;
 pub const RTM_DELADDR: libc::c_uint = 21;
@@ -466,10 +464,6 @@ macro_rules! die {
         panic!("log: {:?}", unsafe {std::ffi::CStr::from_ptr(v.0)});
     };
 }
-pub const NLMSG_HDRLEN: libc::c_ulong = (::core::mem::size_of::<nlmsghdr>() as libc::c_ulong)
-    .wrapping_add(NLMSG_ALIGNTO as libc::c_ulong)
-    .wrapping_sub(1)
-    & !NLMSG_ALIGNTO.wrapping_sub(1) as libc::c_ulong;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -488,16 +482,6 @@ pub struct rtattr {
     pub rta_type: libc::c_ushort,
 }
 
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct ifinfomsg {
-    pub ifi_family: libc::c_uchar,
-    pub __ifi_pad: libc::c_uchar,
-    pub ifi_type: libc::c_ushort,
-    pub ifi_index: libc::c_int,
-    pub ifi_flags: libc::c_uint,
-    pub ifi_change: libc::c_uint,
-}
 
 #[derive(Copy, Clone)]
 #[repr(C)]
