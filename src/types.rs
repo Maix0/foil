@@ -6,161 +6,17 @@ macro_rules! retry {
     ($e:expr) => {
         loop {
             let __result = $e;
-            if !(__result == -1 && unsafe { errno!() == EINTR }) {
+            if !(__result == -1 && unsafe { errno!() == ::libc::EINTR }) {
                 break __result;
             }
         }
     };
 }
 
-pub const BIND_DEVICES: bind_option_t = 4;
-pub const BIND_MOUNT_ERROR_FIND_DEST_MOUNT: bind_mount_result = 5;
-pub const BIND_MOUNT_ERROR_MOUNT: bind_mount_result = 1;
-pub const BIND_MOUNT_ERROR_READLINK_DEST_PROC_FD: bind_mount_result = 4;
-pub const BIND_MOUNT_ERROR_REALPATH_DEST: bind_mount_result = 2;
-pub const BIND_MOUNT_ERROR_REMOUNT_DEST: bind_mount_result = 6;
-pub const BIND_MOUNT_ERROR_REMOUNT_SUBMOUNT: bind_mount_result = 7;
-pub const BIND_MOUNT_ERROR_REOPEN_DEST: bind_mount_result = 3;
-pub const BIND_MOUNT_SUCCESS: bind_mount_result = 0;
-pub const BIND_READONLY: bind_option_t = 1;
-pub const BIND_RECURSIVE: bind_option_t = 8;
-pub const EACCES: libc::c_int = 13;
-pub const EEXIST: libc::c_int = 17;
-pub const EFBIG: libc::c_int = 27;
-pub const EINTR: libc::c_int = 4;
-pub const EINVAL: libc::c_int = 22;
-pub const ENOSPC: libc::c_int = 28;
-pub const ENOTDIR: libc::c_int = 20;
-pub const IFA_ADDRESS: libc::c_uint = 1;
-pub const IFA_ANYCAST: libc::c_uint = 5;
-pub const IFA_BROADCAST: libc::c_uint = 4;
-pub const IFA_CACHEINFO: libc::c_uint = 6;
-pub const IFA_FLAGS: libc::c_uint = 8;
-pub const IFA_F_PERMANENT: libc::c_int = 0x80;
-pub const IFA_LABEL: libc::c_uint = 3;
-pub const IFA_LOCAL: libc::c_uint = 2;
-pub const IFA_MULTICAST: libc::c_uint = 7;
-pub const IFA_PROTO: libc::c_uint = 11;
-pub const IFA_RT_PRIORITY: libc::c_uint = 9;
-pub const IFA_TARGET_NETNSID: libc::c_uint = 10;
-pub const IFA_UNSPEC: libc::c_uint = 0;
-pub const IFF_ALLMULTI: libc::c_uint = 512;
-pub const IFF_AUTOMEDIA: libc::c_uint = 16384;
-pub const IFF_BROADCAST: libc::c_uint = 2;
-pub const IFF_DEBUG: libc::c_uint = 4;
-pub const IFF_DYNAMIC: libc::c_uint = 32768;
-pub const IFF_LOOPBACK: libc::c_uint = 8;
-pub const IFF_MASTER: libc::c_uint = 1024;
-pub const IFF_MULTICAST: libc::c_uint = 4096;
-pub const IFF_NOARP: libc::c_uint = 128;
-pub const IFF_NOTRAILERS: libc::c_uint = 32;
-pub const IFF_POINTOPOINT: libc::c_uint = 16;
-pub const IFF_PORTSEL: libc::c_uint = 8192;
-pub const IFF_PROMISC: libc::c_uint = 256;
-pub const IFF_RUNNING: libc::c_uint = 64;
-pub const IFF_SLAVE: libc::c_uint = 2048;
-pub const IFF_UP: libc::c_uint = 1;
-pub const LONG_MAX: libc::c_long = libc::c_long::MAX;
-pub const MS_NOSYMFOLLOW: libc::c_int = 256;
-pub const NETLINK_ROUTE: libc::c_int = 0;
-pub const NLMSG_DONE: libc::c_int = 0x3;
-pub const NLMSG_ERROR: libc::c_int = 0x2;
-pub const NLM_F_ACK: libc::c_int = 0x4;
-pub const NLM_F_CREATE: libc::c_int = 0x400;
-pub const NLM_F_EXCL: libc::c_int = 0x200;
-pub const NLM_F_REQUEST: libc::c_int = 0x1;
-pub const RTM_BASE: libc::c_uint = 16;
-pub const RTM_DELACTION: libc::c_uint = 49;
-pub const RTM_DELADDR: libc::c_uint = 21;
-pub const RTM_DELADDRLABEL: libc::c_uint = 73;
-pub const RTM_DELCHAIN: libc::c_uint = 101;
-pub const RTM_DELLINK: libc::c_uint = 17;
-pub const RTM_DELLINKPROP: libc::c_uint = 109;
-pub const RTM_DELMDB: libc::c_uint = 85;
-pub const RTM_DELNEIGH: libc::c_uint = 29;
-pub const RTM_DELNETCONF: libc::c_uint = 81;
-pub const RTM_DELNEXTHOP: libc::c_uint = 105;
-pub const RTM_DELNEXTHOPBUCKET: libc::c_uint = 117;
-pub const RTM_DELNSID: libc::c_uint = 89;
-pub const RTM_DELQDISC: libc::c_uint = 37;
-pub const RTM_DELROUTE: libc::c_uint = 25;
-pub const RTM_DELRULE: libc::c_uint = 33;
-pub const RTM_DELTCLASS: libc::c_uint = 41;
-pub const RTM_DELTFILTER: libc::c_uint = 45;
-pub const RTM_DELTUNNEL: libc::c_uint = 121;
-pub const RTM_DELVLAN: libc::c_uint = 113;
-pub const RTM_GETACTION: libc::c_uint = 50;
-pub const RTM_GETADDR: libc::c_uint = 22;
-pub const RTM_GETADDRLABEL: libc::c_uint = 74;
-pub const RTM_GETANYCAST: libc::c_uint = 62;
-pub const RTM_GETCHAIN: libc::c_uint = 102;
-pub const RTM_GETDCB: libc::c_uint = 78;
-pub const RTM_GETLINK: libc::c_uint = 18;
-pub const RTM_GETLINKPROP: libc::c_uint = 110;
-pub const RTM_GETMDB: libc::c_uint = 86;
-pub const RTM_GETMULTICAST: libc::c_uint = 58;
-pub const RTM_GETNEIGH: libc::c_uint = 30;
-pub const RTM_GETNEIGHTBL: libc::c_uint = 66;
-pub const RTM_GETNETCONF: libc::c_uint = 82;
-pub const RTM_GETNEXTHOP: libc::c_uint = 106;
-pub const RTM_GETNEXTHOPBUCKET: libc::c_uint = 118;
-pub const RTM_GETNSID: libc::c_uint = 90;
-pub const RTM_GETQDISC: libc::c_uint = 38;
-pub const RTM_GETROUTE: libc::c_uint = 26;
-pub const RTM_GETRULE: libc::c_uint = 34;
-pub const RTM_GETSTATS: libc::c_uint = 94;
-pub const RTM_GETTCLASS: libc::c_uint = 42;
-pub const RTM_GETTFILTER: libc::c_uint = 46;
-pub const RTM_GETTUNNEL: libc::c_uint = 122;
-pub const RTM_GETVLAN: libc::c_uint = 114;
-pub const RTM_NEWACTION: libc::c_uint = 48;
-pub const RTM_NEWADDR: libc::c_uint = 20;
-pub const RTM_NEWADDRLABEL: libc::c_uint = 72;
-pub const RTM_NEWCACHEREPORT: libc::c_uint = 96;
-pub const RTM_NEWCHAIN: libc::c_uint = 100;
-pub const RTM_NEWLINK: libc::c_uint = 16;
-pub const RTM_NEWLINKPROP: libc::c_uint = 108;
-pub const RTM_NEWMDB: libc::c_uint = 84;
-pub const RTM_NEWNDUSEROPT: libc::c_uint = 68;
-pub const RTM_NEWNEIGH: libc::c_uint = 28;
-pub const RTM_NEWNEIGHTBL: libc::c_uint = 64;
-pub const RTM_NEWNETCONF: libc::c_uint = 80;
-pub const RTM_NEWNEXTHOP: libc::c_uint = 104;
-pub const RTM_NEWNEXTHOPBUCKET: libc::c_uint = 116;
-pub const RTM_NEWNSID: libc::c_uint = 88;
-pub const RTM_NEWPREFIX: libc::c_uint = 52;
-pub const RTM_NEWQDISC: libc::c_uint = 36;
-pub const RTM_NEWROUTE: libc::c_uint = 24;
-pub const RTM_NEWRULE: libc::c_uint = 32;
-pub const RTM_NEWSTATS: libc::c_uint = 92;
-pub const RTM_NEWTCLASS: libc::c_uint = 40;
-pub const RTM_NEWTFILTER: libc::c_uint = 44;
-pub const RTM_NEWTUNNEL: libc::c_uint = 120;
-pub const RTM_NEWVLAN: libc::c_uint = 112;
-pub const RTM_SETDCB: libc::c_uint = 79;
-pub const RTM_SETLINK: libc::c_uint = 19;
-pub const RTM_SETNEIGHTBL: libc::c_uint = 67;
-pub const RTM_SETSTATS: libc::c_uint = 95;
-pub const SCM_PIDFD: libc::c_uint = 4;
-pub const SCM_SECURITY: libc::c_uint = 3;
-pub const SIZE_MAX: libc::size_t = libc::size_t::MAX;
-pub const SSIZE_MAX: libc::ssize_t = libc::ssize_t::MAX;
-pub const _ISalnum: libc::c_uint = 8;
-pub const _ISalpha: libc::c_uint = 1024;
-pub const _ISblank: libc::c_uint = 1;
-pub const _IScntrl: libc::c_uint = 2;
-pub const _ISdigit: libc::c_uint = 2048;
-pub const _ISgraph: libc::c_uint = 32768;
-pub const _ISlower: libc::c_uint = 512;
-pub const _ISprint: libc::c_uint = 16384;
-pub const _ISpunct: libc::c_uint = 4;
-pub const _ISspace: libc::c_uint = 8192;
-pub const _ISupper: libc::c_uint = 256;
-pub const _ISxdigit: libc::c_uint = 4096;
 pub const __IFA_MAX: libc::c_uint = 12;
 pub const __NR_clone: libc::c_int = 56;
 pub const __NR_pivot_root: libc::c_int = 155;
-pub const __RTM_MAX: libc::c_uint = 123;
+
 pub use libc::access;
 pub use libc::bind;
 pub use libc::calloc;
@@ -396,10 +252,6 @@ pub use crate::bubblewrap::*;
 pub use crate::network::*;
 pub use crate::utils::*;
 
-pub type __socket_type = libc::c_uint;
-pub type bind_option_t = libc::c_uint;
-pub type bind_mount_result = libc::c_uint;
-pub type MountTab = *mut MountInfo;
 pub type cap_value_t = libc::c_int;
 pub type cap_user_data_t = *mut __user_cap_data_struct;
 
@@ -463,50 +315,6 @@ macro_rules! die {
         let v = ($($e, )*);
         panic!("log: {:?}", unsafe {std::ffi::CStr::from_ptr(v.0)});
     };
-}
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct ifaddrmsg {
-    pub ifa_family: u8,
-    pub ifa_prefixlen: u8,
-    pub ifa_flags: u8,
-    pub ifa_scope: u8,
-    pub ifa_index: u32,
-}
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct rtattr {
-    pub rta_len: libc::c_ushort,
-    pub rta_type: libc::c_ushort,
-}
-
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct MountInfo {
-    pub mountpoint: *mut libc::c_char,
-    pub options: libc::c_ulong,
-}
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct MountInfoLine {
-    pub mountpoint: *const libc::c_char,
-    pub options: *const libc::c_char,
-    pub covered: bool,
-    pub id: libc::c_int,
-    pub parent_id: libc::c_int,
-    pub first_child: *mut MountInfoLine,
-    pub next_sibling: *mut MountInfoLine,
-}
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct MountOptionHumanReadable {
-    pub flag: libc::c_int,
-    pub name: *const libc::c_char,
 }
 
 #[derive(Copy, Clone)]

@@ -10,12 +10,13 @@ use crate::{
     utils::{
         copy_file_data, create_file, create_pid_socketpair, die_unless_label_valid, ensure_dir,
         ensure_file, fdwalk, fork_intermediate_child, get_file_mode, get_newroot_path,
-        label_create_file, label_exec, label_mount, load_file_data, mkdir_with_parents, pivot_root,
-        raw_clone, read_pid_from_socket, send_pid_on_socket, strappend,
-        strappend_escape_for_mount_options, strconcat, strconcat3, write_file_at, write_to_fd,
-        xcalloc, xclearenv, xsetenv, xunsetenv,
+        label_create_file, label_exec, load_file_data, mkdir_with_parents, pivot_root, raw_clone,
+        read_pid_from_socket, send_pid_on_socket, strappend, strappend_escape_for_mount_options,
+        strconcat, strconcat3, write_file_at, write_to_fd, xcalloc, xclearenv, xsetenv, xunsetenv,
     },
 };
+
+use crate::privilged_op::privileged_op;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -91,7 +92,7 @@ pub const PRIV_SEP_OP_DONE: PrivSepOpKind = 0;
 #[repr(C)]
 pub struct PrivSepOp {
     pub op: u32,
-    pub flags: u32,
+    pub flags: bind_mount::BindOptions,
     pub perms: u32,
     pub size_arg: size_t,
     pub arg1_offset: u32,
@@ -107,51 +108,52 @@ pub struct _SeccompProgram {
 
 pub type SeccompProgram = _SeccompProgram;
 
-pub const MAX_TMPFS_BYTES: libc::c_ulong = (SIZE_MAX >> 1) as libc::c_ulong;
+pub const MAX_TMPFS_BYTES: libc::c_ulong = (usize::MAX >> 1) as libc::c_ulong;
 
-static mut real_uid: uid_t = 0;
-static mut real_gid: gid_t = 0;
-static mut overflow_uid: uid_t = 0;
-static mut overflow_gid: gid_t = 0;
-static mut is_privileged: bool = false;
-static mut argv0: *const libc::c_char = 0 as *const libc::c_char;
-static mut host_tty_dev: *const libc::c_char = 0 as *const libc::c_char;
-static mut proc_fd: libc::c_int = -1;
-static mut opt_exec_label: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-static mut opt_file_label: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-static mut opt_as_pid_1: bool = false;
-static mut opt_argv0: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-static mut opt_chdir_path: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-static mut opt_assert_userns_disabled: bool = false;
-static mut opt_disable_userns: bool = false;
-static mut opt_unshare_user: bool = false;
-static mut opt_unshare_user_try: bool = false;
-static mut opt_unshare_pid: bool = false;
-static mut opt_unshare_ipc: bool = false;
-static mut opt_unshare_net: bool = false;
-static mut opt_unshare_uts: bool = false;
-static mut opt_unshare_cgroup: bool = false;
-static mut opt_unshare_cgroup_try: bool = false;
-static mut opt_needs_devpts: bool = false;
-static mut opt_new_session: bool = false;
-static mut opt_die_with_parent: bool = false;
-static mut opt_sandbox_uid: uid_t = uid_t::MAX;
-static mut opt_sandbox_gid: gid_t = gid_t::MAX;
-static mut opt_sync_fd: libc::c_int = -1;
-static mut opt_block_fd: libc::c_int = -1;
-static mut opt_userns_block_fd: libc::c_int = -1;
-static mut opt_info_fd: libc::c_int = -1;
-static mut opt_json_status_fd: libc::c_int = -1;
-static mut opt_seccomp_fd: libc::c_int = -1;
-static mut opt_sandbox_hostname: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-static mut opt_args_data: *mut libc::c_char = std::ptr::null_mut() as *mut libc::c_char;
-static mut opt_userns_fd: libc::c_int = -1;
-static mut opt_userns2_fd: libc::c_int = -1;
-static mut opt_pidns_fd: libc::c_int = -1;
-static mut opt_tmp_overlay_count: libc::c_int = 0;
-static mut next_perms: libc::c_int = -1;
-static mut next_size_arg: size_t = 0;
-static mut next_overlay_src_count: libc::c_int = 0;
+pub static mut real_uid: uid_t = 0;
+pub static mut real_gid: gid_t = 0;
+pub static mut overflow_uid: uid_t = 0;
+pub static mut overflow_gid: gid_t = 0;
+pub static mut is_privileged: bool = false;
+pub static mut argv0: *const libc::c_char = 0 as *const libc::c_char;
+pub static mut host_tty_dev: *const libc::c_char = 0 as *const libc::c_char;
+pub static mut proc_fd: libc::c_int = -1;
+pub static mut opt_exec_label: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
+pub static mut opt_file_label: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
+pub static mut opt_as_pid_1: bool = false;
+pub static mut opt_argv0: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
+pub static mut opt_chdir_path: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
+pub static mut opt_assert_userns_disabled: bool = false;
+pub static mut opt_disable_userns: bool = false;
+pub static mut opt_unshare_user: bool = false;
+pub static mut opt_unshare_user_try: bool = false;
+pub static mut opt_unshare_pid: bool = false;
+pub static mut opt_unshare_ipc: bool = false;
+pub static mut opt_unshare_net: bool = false;
+pub static mut opt_unshare_uts: bool = false;
+pub static mut opt_unshare_cgroup: bool = false;
+pub static mut opt_unshare_cgroup_try: bool = false;
+pub static mut opt_needs_devpts: bool = false;
+pub static mut opt_new_session: bool = false;
+pub static mut opt_die_with_parent: bool = false;
+pub static mut opt_sandbox_uid: uid_t = uid_t::MAX;
+pub static mut opt_sandbox_gid: gid_t = gid_t::MAX;
+pub static mut opt_sync_fd: libc::c_int = -1;
+pub static mut opt_block_fd: libc::c_int = -1;
+pub static mut opt_userns_block_fd: libc::c_int = -1;
+pub static mut opt_info_fd: libc::c_int = -1;
+pub static mut opt_json_status_fd: libc::c_int = -1;
+pub static mut opt_seccomp_fd: libc::c_int = -1;
+pub static mut opt_sandbox_hostname: *const libc::c_char =
+    std::ptr::null_mut() as *const libc::c_char;
+pub static mut opt_args_data: *mut libc::c_char = std::ptr::null_mut() as *mut libc::c_char;
+pub static mut opt_userns_fd: libc::c_int = -1;
+pub static mut opt_userns2_fd: libc::c_int = -1;
+pub static mut opt_pidns_fd: libc::c_int = -1;
+pub static mut opt_tmp_overlay_count: libc::c_int = 0;
+pub static mut next_perms: libc::c_int = -1;
+pub static mut next_size_arg: size_t = 0;
+pub static mut next_overlay_src_count: libc::c_int = 0;
 
 static mut ns_infos: [NsInfo; 7] = unsafe {
     [
@@ -308,7 +310,7 @@ unsafe fn seccomp_programs_apply() {
             &mut (*program).program as *mut sock_fprog,
         ) != 0
         {
-            if errno!() == EINVAL {
+            if errno!() == libc::EINVAL {
                 die!(
                     c"Unable to set up system call filtering as requested: prctl(PR_SET_SECCOMP) reported EINVAL. (Hint: this requires a kernel configured with CONFIG_SECCOMP and CONFIG_SECCOMP_FILTER.)".as_ptr()
                         as *const u8 as *const libc::c_char,
@@ -421,7 +423,7 @@ unsafe fn report_child_exit_status(exitc: libc::c_int, setup_finished_fd: libc::
             data.as_mut_ptr() as *mut libc::c_void,
             ::core::mem::size_of::<[libc::c_char; 2]>(),
         );
-        if !(__result == -1 && errno!() == EINTR) {
+        if !(__result == -1 && errno!() == libc::EINTR) {
             break __result;
         }
     };
@@ -503,7 +505,7 @@ unsafe fn monitor_child(
         fds[1].revents = 0;
         fds[0].revents = fds[1].revents;
         res = poll(fds.as_mut_ptr(), num_fds as nfds_t, -1);
-        if res == -1 && errno!() != EINTR {
+        if res == -1 && errno!() != libc::EINTR {
             die_with_error!(c"poll".as_ptr());
         }
         if event_fd != -1 {
@@ -547,7 +549,7 @@ unsafe fn do_init(event_fd: libc::c_int, initial_pid: pid_t) -> libc::c_int {
             let mut __result: libc::c_long = 0;
             loop {
                 __result = open((*lock).path, 0 | 0o2000000) as libc::c_long;
-                if !(__result == -1 && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == libc::EINTR) {
                     break;
                 }
             }
@@ -570,7 +572,7 @@ unsafe fn do_init(event_fd: libc::c_int, initial_pid: pid_t) -> libc::c_int {
             let mut __result: libc::c_long = 0;
             loop {
                 __result = fcntl(fd, 6, &mut l as *mut flock) as libc::c_long;
-                if !(__result == -1 && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == libc::EINTR) {
                     break;
                 }
             }
@@ -591,7 +593,7 @@ unsafe fn do_init(event_fd: libc::c_int, initial_pid: pid_t) -> libc::c_int {
             let mut __result: libc::c_long = 0;
             loop {
                 __result = wait(&mut status) as libc::c_long;
-                if !(__result == -1 && errno!() == EINTR) {
+                if !(__result == -1 && errno!() == libc::EINTR) {
                     break;
                 }
             }
@@ -604,14 +606,14 @@ unsafe fn do_init(event_fd: libc::c_int, initial_pid: pid_t) -> libc::c_int {
                 let _res: isize = {
                     loop {
                         let __result = write(event_fd, &raw mut val as *const libc::c_void, 8);
-                        if !(__result == -1 && errno!() == EINTR) {
+                        if !(__result == -1 && errno!() == libc::EINTR) {
                             break __result as _;
                         }
                     }
                 };
             }
         }
-        if !(child == -1 && errno!() != EINTR) {
+        if !(child == -1 && errno!() != libc::EINTR) {
             continue;
         }
         if errno!() != ECHILD {
@@ -764,13 +766,13 @@ unsafe fn prctl_caps(caps: *mut u32, do_cap_bounding: bool, do_set_ambient: bool
         }
         if keep as libc::c_int != 0 && do_set_ambient as libc::c_int != 0 {
             let res = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, cap, 0, 0);
-            if res == -1 && !(errno!() == EINVAL || errno!() == EPERM) {
+            if res == -1 && !(errno!() == libc::EINVAL || errno!() == libc::EPERM) {
                 die_with_error!(c"Adding ambient capability %ld".as_ptr(), cap,);
             }
         }
         if !keep && do_cap_bounding as libc::c_int != 0 {
             let res_0 = prctl(PR_CAPBSET_DROP, cap, 0, 0, 0);
-            if res_0 == -1 && !(errno!() == EINVAL || errno!() == EPERM) {
+            if res_0 == -1 && !(errno!() == libc::EINVAL || errno!() == libc::EPERM) {
                 die_with_error!(c"Dropping capability %ld from bounds".as_ptr(), cap,);
             }
         }
@@ -821,21 +823,15 @@ unsafe fn acquire_privs() {
                 as *const libc::c_char,
         );
     } else if real_uid == 0 {
-        let mut hdr = {
-            let init = __user_cap_header_struct {
-                version: _LINUX_CAPABILITY_VERSION_3 as u32,
-                pid: 0,
-            };
-            init
+        let mut hdr = __user_cap_header_struct {
+            version: _LINUX_CAPABILITY_VERSION_3 as u32,
+            pid: 0,
         };
         let mut data: [__user_cap_data_struct; 2] = [
-            {
-                let init = __user_cap_data_struct {
-                    effective: 0,
-                    permitted: 0,
-                    inheritable: 0,
-                };
-                init
+            __user_cap_data_struct {
+                effective: 0,
+                permitted: 0,
+                inheritable: 0,
             },
             __user_cap_data_struct {
                 effective: 0,
@@ -905,7 +901,7 @@ unsafe fn write_uid_gid_map(
     } else {
         dir = xasprintf(c"%d".as_ptr(), pid);
     }
-    dir_fd = openat(proc_fd, dir, O_PATH);
+    dir_fd = openat(proc_fd, dir, libc::O_PATH);
     if dir_fd < 0 {
         die_with_error!(c"open /proc/%s failed".as_ptr(), dir,);
     }
@@ -951,230 +947,6 @@ unsafe fn write_uid_gid_map(
             die!(c"Unable to re-set fsuid".as_ptr());
         }
     }
-}
-
-unsafe fn privileged_op(
-    privileged_op_socket: libc::c_int,
-    op: u32,
-    flags: u32,
-    perms: u32,
-    size_arg: size_t,
-    arg1: *const libc::c_char,
-    arg2: *const libc::c_char,
-) {
-    let bind_result = BIND_MOUNT_SUCCESS;
-    let failing_path = std::ptr::null_mut() as *mut libc::c_char;
-    if privileged_op_socket != -1 {
-        let mut buffer: [u32; 2048] = [0; 2048];
-        let op_buffer = buffer.as_mut_ptr() as *mut PrivSepOp;
-        let mut buffer_size = ::core::mem::size_of::<PrivSepOp>();
-        let mut arg1_offset = 0;
-        let mut arg2_offset = 0;
-        if !arg1.is_null() {
-            arg1_offset = buffer_size as u32;
-            buffer_size = (buffer_size).wrapping_add((strlen(arg1) as size_t).wrapping_add(1));
-        }
-        if !arg2.is_null() {
-            arg2_offset = buffer_size as u32;
-            buffer_size = (buffer_size).wrapping_add((strlen(arg2)).wrapping_add(1)) as size_t;
-        }
-        if buffer_size >= ::core::mem::size_of::<[u32; 2048]>() {
-            die!(c"privilege separation operation to large".as_ptr());
-        }
-        (*op_buffer).op = op;
-        (*op_buffer).flags = flags;
-        (*op_buffer).perms = perms;
-        (*op_buffer).size_arg = size_arg;
-        (*op_buffer).arg1_offset = arg1_offset;
-        (*op_buffer).arg2_offset = arg2_offset;
-        if !arg1.is_null() {
-            strcpy(
-                (buffer.as_mut_ptr() as *mut libc::c_char).offset(arg1_offset as isize),
-                arg1,
-            );
-        }
-        if !arg2.is_null() {
-            strcpy(
-                (buffer.as_mut_ptr() as *mut libc::c_char).offset(arg2_offset as isize),
-                arg2,
-            );
-        }
-        if ({
-            let mut __result = 0;
-            loop {
-                __result = write(
-                    privileged_op_socket,
-                    buffer.as_mut_ptr() as *const libc::c_void,
-                    buffer_size,
-                );
-                if !(__result == -1 && errno!() == EINTR) {
-                    break;
-                }
-            }
-            __result
-        }) != buffer_size as ssize_t
-        {
-            die!(c"Can't write to privileged_op_socket".as_ptr());
-        }
-        if ({
-            let mut __result = 0;
-            loop {
-                __result = read(
-                    privileged_op_socket,
-                    buffer.as_mut_ptr() as *mut libc::c_void,
-                    1,
-                );
-                if !(__result == -1 && errno!() == EINTR) {
-                    break;
-                }
-            }
-            __result
-        }) != 1
-        {
-            die!(c"Can't read from privileged_op_socket".as_ptr());
-        }
-        return;
-    }
-    match op {
-        0 => {}
-        7 => {
-            let bind_result = bind_mount(
-                proc_fd,
-                Option::<&str>::None,
-                CStr::from_ptr(arg2),
-                BIND_READONLY,
-            );
-            if let Err(e) = &bind_result {
-                die_with_bind_result!(
-                    &bind_result,
-                    errno!(),
-                    e,
-                    c"Can't remount readonly on %s".as_ptr(),
-                    arg2,
-                );
-            }
-        }
-        1 => {
-            let bind_result = bind_mount(
-                proc_fd,
-                Some(CStr::from_ptr(arg1)),
-                CStr::from_ptr(arg2),
-                (BIND_RECURSIVE as libc::c_int as libc::c_uint | flags) as bind_option_t,
-            );
-            if let Err(e) = &bind_result {
-                die_with_bind_result!(
-                    &bind_result,
-                    errno!(),
-                    e,
-                    c"Can't bind mount %s on %s".as_ptr(),
-                    arg1,
-                    arg2,
-                );
-            }
-        }
-        3 => {
-            if mount(
-                c"proc".as_ptr(),
-                arg1,
-                c"proc".as_ptr(),
-                (MS_NOSUID | MS_NOEXEC | MS_NODEV) as libc::c_ulong,
-                std::ptr::null_mut() as *const libc::c_void,
-            ) != 0
-            {
-                die_with_mount_error!(c"Can't mount proc on %s".as_ptr(), arg1,);
-            }
-        }
-        4 => {
-            let mut mode = std::ptr::null_mut() as *mut libc::c_char;
-            if size_arg > MAX_TMPFS_BYTES as size_t {
-                die_with_error!(
-                    c"Specified tmpfs size too large (%zu > %zu)".as_ptr() as *const u8
-                        as *const libc::c_char,
-                    size_arg,
-                    MAX_TMPFS_BYTES,
-                );
-            }
-            if size_arg != 0 {
-                mode = xasprintf(c"mode=%#o,size=%zu".as_ptr(), perms, size_arg);
-            } else {
-                mode = xasprintf(c"mode=%#o".as_ptr(), perms);
-            }
-            let opt = label_mount(mode, opt_file_label);
-            if mount(
-                c"tmpfs".as_ptr(),
-                arg1,
-                c"tmpfs".as_ptr(),
-                (MS_NOSUID | MS_NODEV) as libc::c_ulong,
-                opt as *const libc::c_void,
-            ) != 0
-            {
-                die_with_mount_error!(c"Can't mount tmpfs on %s".as_ptr(), arg1,);
-            }
-        }
-        5 => {
-            if mount(
-                c"devpts".as_ptr(),
-                arg1,
-                c"devpts".as_ptr(),
-                (MS_NOSUID | MS_NOEXEC) as libc::c_ulong,
-                c"newinstance,ptmxmode=0666,mode=620".as_ptr() as *const libc::c_void,
-            ) != 0
-            {
-                die_with_mount_error!(c"Can't mount devpts on %s".as_ptr(), arg1,);
-            }
-        }
-        6 => {
-            if mount(
-                c"mqueue".as_ptr(),
-                arg1,
-                c"mqueue".as_ptr(),
-                0,
-                std::ptr::null_mut() as *const libc::c_void,
-            ) != 0
-            {
-                die_with_mount_error!(c"Can't mount mqueue on %s".as_ptr(), arg1,);
-            }
-        }
-        2 => {
-            if mount(
-                c"overlay".as_ptr(),
-                arg2,
-                c"overlay".as_ptr(),
-                MS_MGC_VAL as libc::c_ulong,
-                arg1 as *const libc::c_void,
-            ) != 0
-            {
-                if errno!() == ELOOP {
-                    die!(
-                        c"Can't make overlay mount on %s with options %s: Overlay directories may not overlap".as_ptr()
-                            as *const u8 as *const libc::c_char,
-                        arg2,
-                        arg1,
-                    );
-                }
-                die_with_mount_error!(
-                    c"Can't make overlay mount on %s with options %s".as_ptr() as *const u8
-                        as *const libc::c_char,
-                    arg2,
-                    arg1,
-                );
-            }
-        }
-        8 => {
-            if !opt_unshare_uts {
-                die!(
-                    c"Refusing to set hostname in original namespace".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            if sethostname(arg1, strlen(arg1)) != 0 {
-                die_with_error!(c"Can't set hostname to %s".as_ptr(), arg1,);
-            }
-        }
-        _ => {
-            die!(c"Unexpected privileged op %d".as_ptr(), op,);
-        }
-    };
 }
 
 unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {

@@ -12,6 +12,7 @@ pub mod bind_mount;
 pub mod bubblewrap;
 pub mod network;
 pub mod parse_mountinfo;
+pub mod privilged_op;
 pub mod types;
 pub mod utils;
 
@@ -32,7 +33,10 @@ pub mod _macros {
         ($e:expr) => {
             loop {
                 let result = $e;
-                if !matches!(&result, ::core::result::Result::Err(::nix::errno::Errno::EINTR)) {
+                if !matches!(
+                    &result,
+                    ::core::result::Result::Err(::nix::errno::Errno::EINTR)
+                ) {
                     break result;
                 }
             }

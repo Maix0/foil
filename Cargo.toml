@@ -8,6 +8,7 @@ autobins = true
 
 
 [dependencies]
+bitflags = "2.6.0"
 bstr = "1.11.1"
 libc = "0.2"
 neli = "0.6.4"

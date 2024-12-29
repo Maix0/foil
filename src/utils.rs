@@ -200,7 +200,7 @@ pub unsafe fn strconcat3(
 }
 
 pub unsafe fn fdwalk(
-    proc_fd: libc::c_int,
+    _proc_fd: libc::c_int,
     cb: Option<unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int>,
     data: *mut libc::c_void,
 ) -> libc::c_int {
@@ -210,7 +210,7 @@ pub unsafe fn fdwalk(
     let mut res = 0;
     let mut d = 0 as *mut DIR;
     dfd = retry!(openat(
-        proc_fd,
+        _proc_fd,
         c"self/fd".as_ptr(),
         0o200000 | 0o4000 | 0o2000000 | 0o400,
     ));
@@ -273,13 +273,13 @@ pub fn write_to_fd(
     }
     while len > 0 {
         res = unsafe { write(fd, content as *const libc::c_void, len as size_t) };
-        if res < 0 && unsafe { errno!() } == EINTR {
+        if res < 0 && unsafe { errno!() } == libc::EINTR {
             continue;
         }
         if res <= 0 {
             if res == 0 {
                 unsafe {
-                    errno!() = ENOSPC;
+                    errno!() = libc::ENOSPC;
                 }
             }
             return -1;
@@ -348,7 +348,7 @@ pub fn ensure_file(path: *const libc::c_char, mode: mode_t) -> libc::c_int {
     } {
         return 0;
     }
-    if create_file(path, mode, std::ptr::null_mut()) != 0 && unsafe { errno!() != EEXIST } {
+    if create_file(path, mode, std::ptr::null_mut()) != 0 && unsafe { errno!() != libc::EEXIST } {
         return -1;
     }
     return 0;
@@ -362,7 +362,7 @@ pub fn copy_file_data(sfd: RawFd, dfd: RawFd) -> libc::c_int {
     loop {
         bytes_read = unsafe { read(sfd, buffer.as_mut_ptr() as *mut libc::c_void, BUFSIZE) };
         if bytes_read == -1 {
-            if unsafe { errno!() == EINTR } {
+            if unsafe { errno!() == libc::EINTR } {
                 continue;
             }
             return -1;
@@ -420,8 +420,8 @@ pub fn load_file_data(fd: libc::c_int, size: *mut size_t) -> *mut libc::c_char {
     data = xmalloc(data_len as size_t) as *mut libc::c_char;
     loop {
         if data_len == data_read + 1 {
-            if data_len > SSIZE_MAX / 2 {
-                unsafe { errno!() = EFBIG };
+            if data_len > isize::MAX / 2 {
+                unsafe { errno!() = libc::EFBIG };
                 return std::ptr::null_mut();
             }
             data_len *= 2;
@@ -435,7 +435,7 @@ pub fn load_file_data(fd: libc::c_int, size: *mut size_t) -> *mut libc::c_char {
                     (data_len - data_read - 1) as size_t,
                 )
             };
-            if !(res < 0 && unsafe { errno!() == EINTR }) {
+            if !(res < 0 && unsafe { errno!() == libc::EINTR }) {
                 break;
             }
         }
@@ -489,12 +489,12 @@ pub unsafe fn ensure_dir(path: *const libc::c_char, mode: mode_t) -> libc::c_int
     if stat(path, buf.as_mut_ptr()) == 0 {
         let buf = buf.assume_init();
         if !(buf.st_mode & S_IFMT as libc::c_uint == 0o40000) {
-            errno!() = ENOTDIR;
+            errno!() = libc::ENOTDIR;
             return -1;
         }
         return 0;
     }
-    if mkdir(path, mode) == -1 && errno!() != EEXIST {
+    if mkdir(path, mode) == -1 && errno!() != libc::EEXIST {
         return -1;
     }
     return 0;
@@ -508,7 +508,7 @@ pub unsafe fn mkdir_with_parents(
     let mut fn_0 = std::ptr::null_mut();
     let mut p = 0 as *mut libc::c_char;
     if pathname.is_null() || *pathname as libc::c_int == '\0' as i32 {
-        errno!() = EINVAL;
+        errno!() = libc::EINVAL;
         return -1;
     }
     fn_0 = xstrdup(pathname);
@@ -594,7 +594,7 @@ pub unsafe fn send_pid_on_socket(sockfd: libc::c_int) {
     );
     if loop {
         let __result = sendmsg(sockfd, &mut msg, 0);
-        if !(__result == -1 && errno!() == EINTR) {
+        if !(__result == -1 && errno!() == libc::EINTR) {
             break __result;
         }
     } < 0
@@ -612,9 +612,7 @@ pub unsafe fn create_pid_socketpair(sockets: *mut libc::c_int) {
         sockets,
     ) != 0
     {
-        die_with_error!(
-            c"Can't create intermediate pids socket".as_ptr(),
-        );
+        die_with_error!(c"Can't create intermediate pids socket".as_ptr(),);
     }
     if setsockopt(
         *sockets.offset(0),
@@ -699,7 +697,7 @@ pub unsafe fn readlink_malloc(pathname: *const libc::c_char) -> *mut libc::c_cha
     let mut n: ssize_t = 0;
     let mut value = std::ptr::null_mut();
     loop {
-        if size > SIZE_MAX.wrapping_div(2) {
+        if size > usize::MAX.wrapping_div(2) {
             die!(c"Symbolic link target pathname too long".as_ptr());
         }
         size = (size as libc::c_ulong).wrapping_mul(2) as size_t as size_t;
@@ -745,16 +743,6 @@ pub unsafe fn pivot_root(
     return syscall(__NR_pivot_root as libc::c_long, new_root, put_old) as libc::c_int;
 }
 
-pub unsafe fn label_mount(
-    opt: *const libc::c_char,
-    mut _mount_label: *const libc::c_char,
-) -> *mut libc::c_char {
-    if !opt.is_null() {
-        return xstrdup(opt);
-    }
-    return std::ptr::null_mut();
-}
-
 pub fn label_create_file(mut _file_label: *const libc::c_char) -> libc::c_int {
     return 0;
 }
@@ -765,14 +753,14 @@ pub fn label_exec(mut _exec_label: *const libc::c_char) -> libc::c_int {
 
 pub fn mount_strerror(errsv: libc::c_int) -> *const libc::c_char {
     match errsv {
-        ENOSPC => c"Limit exceeded (ENOSPC). (Hint: Check that /proc/sys/fs/mount-max is sufficient, typically 100000)".as_ptr(),
+       libc::ENOSPC => c"Limit exceeded (ENOSPC). (Hint: Check that /proc/sys/fs/mount-max is sufficient, typically 100000)".as_ptr(),
         _ => unsafe {strerror(errsv)},
     }
 }
 
 #[no_mangle]
 extern "C" fn xadd(a: size_t, b: size_t) -> size_t {
-    if a > SIZE_MAX.wrapping_sub(b) {
+    if a > usize::MAX.wrapping_sub(b) {
         die_oom();
     }
     return a.wrapping_add(b);
@@ -780,7 +768,7 @@ extern "C" fn xadd(a: size_t, b: size_t) -> size_t {
 
 #[no_mangle]
 unsafe extern "C" fn xmul(a: size_t, b: size_t) -> size_t {
-    if b != 0 && a > SIZE_MAX.wrapping_div(b) {
+    if b != 0 && a > usize::MAX.wrapping_div(b) {
         die_oom();
     }
     return a.wrapping_mul(b);
@@ -791,8 +779,7 @@ pub unsafe fn strappend(dest: *mut StringBuilder, src: *const libc::c_char) {
     let new_offset = xadd((*dest).offset, len);
     if new_offset >= (*dest).size {
         (*dest).size = xmul(xadd(new_offset, 1), 2);
-        (*dest).buf =
-            xrealloc((*dest).buf as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
+        (*dest).buf = xrealloc((*dest).buf as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
     }
     strncpy(
         ((*dest).buf).offset((*dest).offset as isize),

@@ -9,7 +9,16 @@ use nix::mount::MsFlags;
 use nix::sys::stat::Mode;
 use nix::NixPath;
 
-use crate::{nix_retry, types::*};
+use crate::nix_retry;
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, Hash)]
+    pub struct BindOptions : u32 {
+        const BIND_DEVICES  = 0b000000000001;
+        const BIND_READONLY  = 0b000000000010;
+        const BIND_RECURSIVE  = 0b000000000100;
+    }
+}
 
 /// Will return an error on invalid Paths.
 /// Will return Ok(None) in case of [`libc::realpath`] returing nullptr
@@ -50,11 +59,11 @@ pub fn bind_mount<'a, 'b, P1: ?Sized + NixPath, P2: ?Sized + NixPath>(
     proc_fd: RawFd,
     src: Option<&'a P1>,
     dest: &'b P2,
-    options: bind_option_t,
+    options: BindOptions,
 ) -> Result<(), BindMountError> {
-    let readonly = options & BIND_READONLY != 0;
-    let devices = options & BIND_DEVICES != 0;
-    let recursive = options & BIND_RECURSIVE != 0;
+    let readonly = options.contains(BindOptions::BIND_READONLY);
+    let devices = options.contains(BindOptions::BIND_DEVICES);
+    let recursive = options.contains(BindOptions::BIND_RECURSIVE);
 
     if let Some(src) = src {
         if nix::mount::mount(

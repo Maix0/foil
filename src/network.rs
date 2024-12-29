@@ -1,9 +1,6 @@
 use crate::types::*;
 use crate::*;
 use ::libc;
-use neli::consts::rtnl::{Ifa, IfaF, IfaFFlags};
-use neli::rtnl::Ifaddrmsg;
-use neli::types::{Buffer, RtBuffer};
 use nix::sys::socket::{AddressFamily, MsgFlags, NetlinkAddr, SockFlag, SockProtocol, SockType};
 
 use std::os::fd::{AsRawFd, RawFd};
@@ -21,19 +18,19 @@ struct ifaddrmsg {
 #[repr(C)]
 #[derive(Debug)]
 struct rtattr {
-    rta_len: libc::c_ushort,
-    rta_type: libc::c_ushort,
+    rta_len: u16,
+    rta_type: u16,
 }
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct ifinfomsg {
-    ifi_family: libc::c_uchar,
-    __ifi_pad: libc::c_uchar,
-    ifi_type: libc::c_ushort,
-    ifi_index: libc::c_int,
-    ifi_flags: libc::c_uint,
-    ifi_change: libc::c_uint,
+    ifi_family: u8,
+    __ifi_pad: u8,
+    ifi_type: u16,
+    ifi_index: i32,
+    ifi_flags: u32,
+    ifi_change: u32,
 }
 
 const RTA_ALIGNTO: usize = 4;
@@ -219,29 +216,9 @@ pub fn loopback_setup() -> Result<(), LoopbackSetupError> {
     nix::sys::socket::bind(rtnl_fd.as_raw_fd(), &src_addr)
         .map_err(LoopbackSetupError::BindError)?;
 
-    let mut payload = Ifaddrmsg {
-        ifa_family: neli::consts::rtnl::RtAddrFamily::Inet,
-        ifa_prefixlen: 8,
-        ifa_flags: IfaFFlags::new(&[IfaF::Permanent]),
-        ifa_scope: libc::RT_SCOPE_HOST as u8,
-        ifa_index: if_loopback as _,
-        rtattrs: RtBuffer::<Ifa, Buffer>::new(),
-    };
-
-    payload.rtattrs.push(neli::rtnl::Rtattr::new(
-        None,
-        Ifa::Local,
-        libc::INADDR_LOOPBACK.to_be(),
-    )?);
-    payload.rtattrs.push(neli::rtnl::Rtattr::new(
-        None,
-        Ifa::Address,
-        libc::INADDR_LOOPBACK.to_be(),
-    )?);
-
     unsafe {
         (&raw mut buffer[0]).cast::<nlmsghdr>().write(nlmsghdr {
-            nlmsg_len: dbg!(nlmsg_length(size_of::<ifaddrmsg>()) as _),
+            nlmsg_len: nlmsg_length(size_of::<ifaddrmsg>()) as _,
             nlmsg_type: libc::RTM_NEWADDR as _,
             nlmsg_flags: (libc::NLM_F_CREATE
                 | libc::NLM_F_EXCL
@@ -291,7 +268,7 @@ pub fn loopback_setup() -> Result<(), LoopbackSetupError> {
     buffer.fill(0);
     unsafe {
         (&raw mut buffer[0]).cast::<nlmsghdr>().write(nlmsghdr {
-            nlmsg_len: dbg!(nlmsg_length(size_of::<ifinfomsg>()) as _),
+            nlmsg_len: nlmsg_length(size_of::<ifinfomsg>()) as _,
             nlmsg_type: libc::RTM_NEWLINK as _,
             nlmsg_flags: (libc::NLM_F_ACK | libc::NLM_F_REQUEST) as _,
             nlmsg_seq: counter(),
