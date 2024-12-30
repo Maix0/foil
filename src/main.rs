@@ -42,6 +42,16 @@ pub mod _macros {
             }
         };
     }
+
+    #[macro_export]
+    macro_rules! OsString {
+        ($ptr:expr) => {{
+            assert!(!$ptr.is_null());
+            ::std::ffi::OsStr::to_os_string(::std::ffi::OsStr::from_bytes(
+                ::std::ffi::CStr::to_bytes(::std::ffi::CStr::from_ptr($ptr)),
+            ))
+        }};
+    }
 }
 
 pub fn main() {

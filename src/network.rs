@@ -92,7 +92,6 @@ fn counter() -> u32 {
 
 #[derive(Debug)]
 pub enum LoopbackSetupError {
-    SerError(neli::err::SerError),
     NixError(nix::errno::Errno),
     GetInterface(nix::errno::Errno),
     CreateSocket(nix::errno::Errno),
@@ -105,12 +104,6 @@ pub enum LoopbackSetupError {
 impl From<nix::errno::Errno> for LoopbackSetupError {
     fn from(value: nix::errno::Errno) -> Self {
         Self::NixError(value)
-    }
-}
-
-impl From<neli::err::SerError> for LoopbackSetupError {
-    fn from(value: neli::err::SerError) -> Self {
-        Self::SerError(value)
     }
 }
 

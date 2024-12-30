@@ -1,7 +1,11 @@
-use std::ffi::CStr;
+use std::ffi::{CStr, OsStr};
+use std::num::NonZeroUsize;
+use std::os::unix::ffi::OsStrExt;
 
 use ::libc;
+use bitflags::Flags;
 use libc::{fcntl, printf, uintmax_t, AT_FDCWD, MNT_DETACH, MS_MGC_VAL, S_IFDIR};
+use privilged_op::PrivilegedOp;
 
 use crate::*;
 use crate::{
@@ -107,8 +111,6 @@ pub struct _SeccompProgram {
 }
 
 pub type SeccompProgram = _SeccompProgram;
-
-pub const MAX_TMPFS_BYTES: libc::c_ulong = (usize::MAX >> 1) as libc::c_ulong;
 
 pub static mut real_uid: uid_t = 0;
 pub static mut real_gid: gid_t = 0;
@@ -1023,23 +1025,19 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         }
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_BIND_MOUNT as libc::c_int as u32,
-                            ((if (*op).type_0 == SETUP_RO_BIND_MOUNT as libc::c_int as libc::c_uint
-                            {
-                                BIND_READONLY as libc::c_int
-                            } else {
-                                0
-                            }) | (if (*op).type_0
-                                == SETUP_DEV_BIND_MOUNT as libc::c_int as libc::c_uint
-                            {
-                                BIND_DEVICES as libc::c_int
-                            } else {
-                                0
-                            })) as u32,
-                            0,
-                            0,
-                            source,
-                            dest,
+                            PrivilegedOp::BindMount {
+                                src: OsString![source].into(),
+                                dest: OsString![dest].into(),
+                                flags: if (*op).type_0 == SETUP_RO_BIND_MOUNT {
+                                    BindOptions::BIND_READONLY
+                                } else {
+                                    BindOptions::empty()
+                                } | if (*op).type_0 == SETUP_DEV_BIND_MOUNT {
+                                    BindOptions::BIND_DEVICES
+                                } else {
+                                    BindOptions::empty()
+                                },
+                            },
                         );
                         if (*op).fd >= 0 {
                             let mut fd_st = std::mem::zeroed();
@@ -1107,24 +1105,19 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         strappend(&mut sb, c",userxattr".as_ptr());
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_OVERLAY_MOUNT as libc::c_int as u32,
-                            0,
-                            0,
-                            0,
-                            sb.buf,
-                            dest,
+                            PrivilegedOp::OverlayMount {
+                                path: OsString![dest].into(),
+                                options: OsString![sb.buf],
+                            },
                         );
                         free(sb.buf as *mut libc::c_void);
                     }
                     16 => {
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_REMOUNT_RO_NO_RECURSIVE as libc::c_int as u32,
-                            0,
-                            0,
-                            0,
-                            std::ptr::null_mut() as *const libc::c_char,
-                            dest,
+                            PrivilegedOp::ReadOnlyRemount {
+                                path: OsString![dest].into(),
+                            },
                         );
                     }
                     7 => {
@@ -1134,22 +1127,18 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         if unshare_pid as libc::c_int != 0 || opt_pidns_fd != -1 {
                             privileged_op(
                                 privileged_op_socket,
-                                PRIV_SEP_OP_PROC_MOUNT as libc::c_int as u32,
-                                0,
-                                0,
-                                0,
-                                dest,
-                                std::ptr::null_mut() as *const libc::c_char,
+                                PrivilegedOp::ProcMount {
+                                    path: OsString![dest].into(),
+                                },
                             );
                         } else {
                             privileged_op(
                                 privileged_op_socket,
-                                PRIV_SEP_OP_BIND_MOUNT as libc::c_int as u32,
-                                0,
-                                0,
-                                0,
-                                c"oldroot/proc".as_ptr(),
-                                dest,
+                                PrivilegedOp::BindMount {
+                                    src: OsString![c"oldroot/proc".as_ptr()].into(),
+                                    dest: OsString![dest].into(),
+                                    flags: BindOptions::empty(),
+                                },
                             );
                         }
                         i = 0;
@@ -1162,19 +1151,20 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                             let subdir =
                                 strconcat3(dest, c"/".as_ptr(), cover_proc_dirs[i as usize]);
                             if access(subdir, W_OK) < 0 {
-                                if !(errno!() == EACCES || errno!() == ENOENT || errno!() == EROFS)
+                                if !(errno!() == libc::EACCES
+                                    || errno!() == libc::ENOENT
+                                    || errno!() == libc::EROFS)
                                 {
                                     die_with_error!(c"Can't access %s".as_ptr(), subdir,);
                                 }
                             } else {
                                 privileged_op(
                                     privileged_op_socket,
-                                    PRIV_SEP_OP_BIND_MOUNT as libc::c_int as u32,
-                                    BIND_READONLY as libc::c_int as u32,
-                                    0,
-                                    0,
-                                    subdir,
-                                    subdir,
+                                    PrivilegedOp::BindMount {
+                                        src: OsString![subdir].into(),
+                                        dest: OsString![subdir].into(),
+                                        flags: BindOptions::BIND_READONLY,
+                                    },
                                 );
                             }
                             i = i.wrapping_add(1);
@@ -1186,12 +1176,11 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         }
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_TMPFS_MOUNT as libc::c_int as u32,
-                            0,
-                            0o755,
-                            0,
-                            dest,
-                            std::ptr::null_mut() as *const libc::c_char,
+                            PrivilegedOp::TmpfsMount {
+                                size: None,
+                                perms: 0o755,
+                                path: OsString![dest].into(),
+                            },
                         );
                         i = 0;
                         while (i as libc::c_ulong)
@@ -1218,12 +1207,11 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                             }
                             privileged_op(
                                 privileged_op_socket,
-                                PRIV_SEP_OP_BIND_MOUNT as libc::c_int as u32,
-                                BIND_DEVICES as libc::c_int as u32,
-                                0,
-                                0,
-                                node_src,
-                                node_dest,
+                                PrivilegedOp::BindMount {
+                                    src: OsString![node_src].into(),
+                                    dest: OsString![node_dest].into(),
+                                    flags: BindOptions::BIND_DEVICES,
+                                },
                             );
                             i = i.wrapping_add(1);
                         }
@@ -1266,12 +1254,9 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         }
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_DEVPTS_MOUNT as libc::c_int as u32,
-                            0,
-                            0,
-                            0,
-                            pts,
-                            std::ptr::null_mut() as *const libc::c_char,
+                            PrivilegedOp::DevMount {
+                                path: OsString![pts].into(),
+                            },
                         );
                         if symlink(c"pts/ptmx".as_ptr(), ptmx) != 0 {
                             die_with_error!(
@@ -1293,12 +1278,11 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                             }
                             privileged_op(
                                 privileged_op_socket,
-                                PRIV_SEP_OP_BIND_MOUNT as libc::c_int as u32,
-                                BIND_DEVICES as libc::c_int as u32,
-                                0,
-                                0,
-                                src_tty_dev,
-                                dest_console,
+                                PrivilegedOp::BindMount {
+                                    src: OsString![src_tty_dev].into(),
+                                    dest: OsString![dest_console].into(),
+                                    flags: BindOptions::BIND_DEVICES,
+                                },
                             );
                         }
                     }
@@ -1311,12 +1295,11 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         }
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_TMPFS_MOUNT as libc::c_int as u32,
-                            0,
-                            (*op).perms as u32,
-                            (*op).size,
-                            dest,
-                            std::ptr::null_mut() as *const libc::c_char,
+                            PrivilegedOp::TmpfsMount {
+                                size: NonZeroUsize::new((*op).size),
+                                perms: ((*op).perms) as _,
+                                path: OsString![dest].into(),
+                            },
                         );
                     }
                     10 => {
@@ -1325,12 +1308,9 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         }
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_MQUEUE_MOUNT as libc::c_int as u32,
-                            0,
-                            0,
-                            0,
-                            dest,
-                            std::ptr::null_mut() as *const libc::c_char,
+                            PrivilegedOp::MqueueMount {
+                                path: OsString![dest].into(),
+                            },
                         );
                     }
                     11 => {
@@ -1416,28 +1396,27 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         }
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_BIND_MOUNT as libc::c_int as u32,
-                            (if (*op).type_0
-                                == SETUP_MAKE_RO_BIND_FILE as libc::c_int as libc::c_uint
-                            {
-                                BIND_READONLY as libc::c_int
-                            } else {
-                                0
-                            }) as u32,
-                            0,
-                            0,
-                            tempfile.as_mut_ptr(),
-                            dest,
+                            privilged_op::PrivilegedOp::BindMount {
+                                src: OsString![tempfile.as_mut_ptr()].into(),
+                                dest: OsString![dest].into(),
+                                flags: (if (*op).type_0
+                                    == SETUP_MAKE_RO_BIND_FILE as libc::c_int as libc::c_uint
+                                {
+                                    BindOptions::BIND_READONLY
+                                } else {
+                                    BindOptions::empty()
+                                }),
+                            },
                         );
                         unlink(tempfile.as_mut_ptr());
                     }
                     15 => {
                         assert!(!((*op).source).is_null());
                         if symlink((*op).source, dest) != 0 {
-                            if errno!() == EEXIST {
+                            if errno!() == libc::EEXIST {
                                 let existing = readlink_malloc(dest);
                                 if existing.is_null() {
-                                    if errno!() == EINVAL {
+                                    if errno!() == libc::EINVAL {
                                         die!(
                                             c"Can't make symlink at %s: destination exists and is not a symlink".as_ptr()
                                                 as *const u8 as *const libc::c_char,
@@ -1474,12 +1453,9 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
                         assert!(!((*op).dest).is_null());
                         privileged_op(
                             privileged_op_socket,
-                            PRIV_SEP_OP_SET_HOSTNAME as libc::c_int as u32,
-                            0,
-                            0,
-                            0,
-                            (*op).dest,
-                            std::ptr::null_mut() as *const libc::c_char,
+                            privilged_op::PrivilegedOp::SetHostname {
+                                name: OsString![(*op).dest],
+                            },
                         );
                     }
                     6 | _ => {
@@ -1491,15 +1467,7 @@ unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
         }
         op = (*op).next;
     }
-    privileged_op(
-        privileged_op_socket,
-        PRIV_SEP_OP_DONE as libc::c_int as u32,
-        0,
-        0,
-        0,
-        std::ptr::null_mut() as *const libc::c_char,
-        std::ptr::null_mut() as *const libc::c_char,
-    );
+    privileged_op(privileged_op_socket, privilged_op::PrivilegedOp::Done);
 }
 
 unsafe fn close_ops_fd() {
@@ -1569,13 +1537,7 @@ unsafe fn read_priv_sec_op(
     arg2: *mut *const libc::c_char,
 ) -> u32 {
     let op = buffer as *const PrivSepOp;
-    let mut rec_len: ssize_t = 0;
-    loop {
-        rec_len = read(read_socket, buffer, buffer_size.wrapping_sub(1));
-        if !(rec_len == -1 && errno!() == EINTR) {
-            break;
-        }
-    }
+    let rec_len: ssize_t = retry!(read(read_socket, buffer, buffer_size.wrapping_sub(1)));
     if rec_len < 0 {
         die_with_error!(c"Can't read from unprivileged helper".as_ptr(),);
     }
@@ -1589,7 +1551,7 @@ unsafe fn read_priv_sec_op(
         );
     }
     *(buffer as *mut libc::c_char).offset(rec_len as isize) = 0;
-    *flags = (*op).flags;
+    *flags = (*op).flags.bits();
     *perms = (*op).perms;
     *size_arg = (*op).size_arg;
     *arg1 = resolve_string_offset(buffer, rec_len as size_t, (*op).arg1_offset);
@@ -2461,9 +2423,8 @@ unsafe fn parse_args_recurse(
             errno!() = 0;
             size = strtoull(*argv.offset(1), &mut endptr_17, 0);
             if errno!() != 0
-                || *(*__ctype_b_loc()).offset(*(*argv.offset(1)).offset(0) as libc::c_int as isize)
+                || libc::isdigit(*(*argv.offset(1)) as i32) as libc::c_int as libc::c_ushort
                     as libc::c_int
-                    & _ISdigit as libc::c_int as libc::c_ushort as libc::c_int
                     == 0
                 || endptr_17.is_null()
                 || *endptr_17 != '\0' as i8
@@ -2474,10 +2435,10 @@ unsafe fn parse_args_recurse(
                         as *const libc::c_char
                 );
             }
-            if size > MAX_TMPFS_BYTES as libc::c_ulonglong {
+            if size > privilged_op::MAX_TMPFS_BYTES.get() as _ {
                 die!(
                     c"--size (for tmpfs) is limited to %zu".as_ptr(),
-                    MAX_TMPFS_BYTES,
+                    privilged_op::MAX_TMPFS_BYTES,
                 );
             }
             next_size_arg = size as size_t;
@@ -2579,7 +2540,7 @@ unsafe fn namespace_ids_read(pid: pid_t) {
         let mut __result: libc::c_long = 0;
         loop {
             __result = openat(proc_fd, dir, 0o10000000) as libc::c_long;
-            if !(__result == -1 && errno!() == EINTR) {
+            if !(__result == -1 && errno!() == libc::EINTR) {
                 break;
             }
         }
@@ -2772,16 +2733,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                 as *const libc::c_char,
         );
     }
-    proc_fd = ({
-        let mut __result: libc::c_long = 0;
-        loop {
-            __result = open(c"/proc".as_ptr(), 0o10000000) as libc::c_long;
-            if !(__result == -1 && errno!() == EINTR) {
-                break;
-            }
-        }
-        __result
-    }) as libc::c_int;
+    proc_fd = retry!(open(c"/proc".as_ptr(), 0o10000000));
     if proc_fd == -1 {
         die_with_error!(c"Can't open /proc".as_ptr());
     }
@@ -2840,7 +2792,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         }
     }
     if opt_userns_fd > 0 && setns(opt_userns_fd, CLONE_NEWUSER) != 0 {
-        if errno!() == EINVAL {
+        if errno!() == libc::EINVAL {
             die!(
                 c"Joining the specified user namespace failed, it might not be a descendant of the current user namespace.".as_ptr()
                     as *const u8 as *const libc::c_char,
@@ -2855,7 +2807,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     pid = raw_clone(clone_flags as libc::c_ulong, std::ptr::null_mut());
     if pid == -1 {
         if opt_unshare_user {
-            if errno!() == EINVAL {
+            if errno!() == libc::EINVAL {
                 die!(
                     c"Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems.".as_ptr()
                         as *const u8 as *const libc::c_char,
@@ -2867,7 +2819,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                 );
             }
         }
-        if errno!() == ENOSPC {
+        if errno!() == libc::ENOSPC {
             die!(
                 c"Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)".as_ptr()
                     as *const u8 as *const libc::c_char,
@@ -2918,39 +2870,24 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         }
         if opt_userns_block_fd != -1 {
             let mut b: [libc::c_char; 1] = [0; 1];
-            ({
-                loop {
-                    let __result =
-                        read(opt_userns_block_fd, b.as_mut_ptr() as *mut libc::c_void, 1);
-                    if !(__result == -1 && errno!() == EINTR) {
-                        break __result;
-                    }
-                }
-            });
-            ({
-                loop {
-                    let __result =
-                        read(opt_userns_block_fd, b.as_mut_ptr() as *mut libc::c_void, 1);
-                    if !(__result == -1 && errno!() == EINTR) {
-                        break __result;
-                    }
-                }
-            });
+            retry!(read(
+                opt_userns_block_fd,
+                b.as_mut_ptr() as *mut libc::c_void,
+                1
+            ));
+            retry!(read(
+                opt_userns_block_fd,
+                b.as_mut_ptr() as *mut libc::c_void,
+                1
+            ));
             close(opt_userns_block_fd);
         }
         val = 1;
-        res = ({
-            loop {
-                let __result = write(
-                    child_wait_fd,
-                    &mut val as *mut u64 as *const libc::c_void,
-                    8,
-                );
-                if !(__result == -1 && errno!() == EINTR) {
-                    break __result;
-                }
-            }
-        }) as libc::c_int;
+        res = retry!(write(
+            child_wait_fd,
+            &mut val as *mut u64 as *const libc::c_void,
+            8,
+        )) as _;
         close(child_wait_fd);
         return monitor_child(event_fd, pid, setup_finished_pipe[0]);
     }
@@ -3100,16 +3037,15 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                     &mut arg1,
                     &mut arg2,
                 );
-                privileged_op(-1, op, flags, perms, size_arg, arg1, arg2);
-                if ({
-                    loop {
-                        let __result =
-                            write(unpriv_socket, buffer.as_mut_ptr() as *const libc::c_void, 1);
-                        if !(__result == -1 && errno!() == EINTR) {
-                            break __result;
-                        }
-                    }
-                }) != 1
+                {
+                    panic!("Handle privilged op");
+                    //privileged_op(-1, op, flags, perms, size_arg, arg1, arg2);
+                }
+                if retry!(write(
+                    unpriv_socket,
+                    buffer.as_mut_ptr() as *const libc::c_void,
+                    1
+                )) != 1
                 {
                     die!(c"Can't write to op_socket".as_ptr());
                 }
@@ -3117,13 +3053,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                     break;
                 }
             }
-            let mut __result: libc::c_long = 0;
-            loop {
-                __result = waitpid(child, &mut status, 0) as libc::c_long;
-                if !(__result == -1 && errno!() == EINTR) {
-                    break;
-                }
-            }
+            retry!(waitpid(child, &mut status, 0) as libc::c_long);
         }
     } else {
         setup_newroot(opt_unshare_pid, -1);
@@ -3142,16 +3072,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if umount2(c"oldroot".as_ptr(), MNT_DETACH) != 0 {
         die_with_error!(c"unmount old root".as_ptr());
     }
-    let oldrootfd = ({
-        let mut __result_0: libc::c_long = 0;
-        loop {
-            __result_0 = open(c"/".as_ptr(), 0o200000 | 0) as libc::c_long;
-            if !(__result_0 == -1 && errno!() == EINTR) {
-                break;
-            }
-        }
-        __result_0
-    }) as libc::c_int;
+    let oldrootfd = retry!(open(c"/".as_ptr(), 0o200000 | 0));
     if oldrootfd < 0 {
         die_with_error!(c"can't open /".as_ptr());
     }
@@ -3181,17 +3102,11 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     {
         if opt_disable_userns {
             let mut sysctl_fd = -1;
-            sysctl_fd = ({
-                let mut __result_0: libc::c_long = 0;
-                loop {
-                    __result_0 = openat(proc_fd, c"sys/user/max_user_namespaces".as_ptr(), 0o1)
-                        as libc::c_long;
-                    if !(__result_0 == -1 && errno!() == EINTR) {
-                        break;
-                    }
-                }
-                __result_0
-            }) as libc::c_int;
+            sysctl_fd = retry!(openat(
+                proc_fd,
+                c"sys/user/max_user_namespaces".as_ptr(),
+                0o1
+            ));
             if sysctl_fd < 0 {
                 die_with_error!(c"cannot open /proc/sys/user/max_user_namespaces".as_ptr()
                     as *const u8 as *const libc::c_char,);
@@ -3226,22 +3141,8 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     drop_privs(!is_privileged, true);
     if opt_block_fd != -1 {
         let mut b_0: [libc::c_char; 1] = [0; 1];
-        ({
-            loop {
-                let __result_0 = read(opt_block_fd, b_0.as_mut_ptr() as *mut libc::c_void, 1);
-                if !(__result_0 == -1 && errno!() == EINTR) {
-                    break __result_0;
-                }
-            }
-        });
-        ({
-            loop {
-                let __result_0 = read(opt_block_fd, b_0.as_mut_ptr() as *mut libc::c_void, 1);
-                if !(__result_0 == -1 && errno!() == EINTR) {
-                    break __result_0;
-                }
-            }
-        });
+        retry!(read(opt_block_fd, b_0.as_mut_ptr() as *mut libc::c_void, 1));
+        retry!(read(opt_block_fd, b_0.as_mut_ptr() as *mut libc::c_void, 1));
         close(opt_block_fd);
     }
     if opt_seccomp_fd != -1 {
