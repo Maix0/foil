@@ -12,7 +12,7 @@ use nix::NixPath;
 use crate::nix_retry;
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, Hash)]
+    #[derive(Clone, Copy, Debug, Hash, serde::Serialize, serde::Deserialize)]
     pub struct BindOptions : u32 {
         const BIND_DEVICES  = 0b000000000001;
         const BIND_READONLY  = 0b000000000010;
@@ -44,7 +44,7 @@ fn realpath_wrapper<P: nix::NixPath + ?Sized>(
         })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum BindMountError {
     Mount,
     RealpathDest,

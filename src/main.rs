@@ -5,6 +5,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(static_mut_refs)]
 #![allow(clippy::all)]
+#![allow(useless_ptr_null_checks)]
 
 extern crate libc;
 
@@ -15,6 +16,8 @@ pub mod parse_mountinfo;
 pub mod privilged_op;
 pub mod types;
 pub mod utils;
+
+mod serde_errno;
 
 #[macro_use]
 pub mod _macros {

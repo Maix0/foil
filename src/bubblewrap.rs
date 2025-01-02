@@ -1,11 +1,12 @@
 use std::ffi::{CStr, OsStr};
 use std::num::NonZeroUsize;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 
 use ::libc;
 use bitflags::Flags;
 use libc::{fcntl, printf, uintmax_t, AT_FDCWD, MNT_DETACH, MS_MGC_VAL, S_IFDIR};
-use privilged_op::PrivilegedOp;
+use privilged_op::{PrivilegedOp, PrivilegedOpError};
 
 use crate::*;
 use crate::{
@@ -1508,57 +1509,6 @@ unsafe fn resolve_symlinks_in_ops() {
     }
 }
 
-unsafe fn resolve_string_offset(
-    buffer: *mut libc::c_void,
-    buffer_size: size_t,
-    offset: u32,
-) -> *const libc::c_char {
-    if offset == 0 {
-        return std::ptr::null_mut() as *const libc::c_char;
-    }
-    if offset > buffer_size as u32 {
-        die!(
-            c"Invalid string offset %d (buffer size %zd)".as_ptr(),
-            offset,
-            buffer_size,
-        );
-    }
-    return (buffer as *const libc::c_char).offset(offset as isize);
-}
-
-unsafe fn read_priv_sec_op(
-    read_socket: libc::c_int,
-    buffer: *mut libc::c_void,
-    buffer_size: size_t,
-    flags: *mut u32,
-    perms: *mut u32,
-    size_arg: *mut size_t,
-    arg1: *mut *const libc::c_char,
-    arg2: *mut *const libc::c_char,
-) -> u32 {
-    let op = buffer as *const PrivSepOp;
-    let rec_len: ssize_t = retry!(read(read_socket, buffer, buffer_size.wrapping_sub(1)));
-    if rec_len < 0 {
-        die_with_error!(c"Can't read from unprivileged helper".as_ptr(),);
-    }
-    if rec_len == 0 {
-        exit(1);
-    }
-    if (rec_len as size_t) < ::core::mem::size_of::<PrivSepOp>() {
-        die!(
-            c"Invalid size %zd from unprivileged helper".as_ptr(),
-            rec_len,
-        );
-    }
-    *(buffer as *mut libc::c_char).offset(rec_len as isize) = 0;
-    *flags = (*op).flags.bits();
-    *perms = (*op).perms;
-    *size_arg = (*op).size_arg;
-    *arg1 = resolve_string_offset(buffer, rec_len as size_t, (*op).arg1_offset);
-    *arg2 = resolve_string_offset(buffer, rec_len as size_t, (*op).arg2_offset);
-    return (*op).op;
-}
-
 unsafe fn print_version_and_exit() -> ! {
     printf(c"%s\n".as_ptr(), PACKAGE_STRING.as_ptr());
     exit(0);
@@ -3015,45 +2965,52 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             setup_newroot(opt_unshare_pid, privsep_sockets[1]);
             exit(0);
         } else {
-            let mut status: libc::c_int = 0;
-            let mut buffer: [u32; 2048] = [0; 2048];
-            let mut op: u32 = 0;
-            let mut flags: u32 = 0;
-            let mut perms: u32 = 0;
-            let mut size_arg: size_t = 0;
-            let mut arg1 = 0 as *const libc::c_char;
-            let mut arg2 = 0 as *const libc::c_char;
-            let mut unpriv_socket = -1;
-            unpriv_socket = privsep_sockets[0];
-            close(privsep_sockets[1]);
-            loop {
-                op = read_priv_sec_op(
-                    unpriv_socket,
-                    buffer.as_mut_ptr() as *mut libc::c_void,
-                    ::core::mem::size_of::<[u32; 2048]>(),
-                    &mut flags,
-                    &mut perms,
-                    &mut size_arg,
-                    &mut arg1,
-                    &mut arg2,
-                );
-                {
-                    panic!("Handle privilged op");
-                    //privileged_op(-1, op, flags, perms, size_arg, arg1, arg2);
-                }
-                if retry!(write(
-                    unpriv_socket,
-                    buffer.as_mut_ptr() as *const libc::c_void,
-                    1
-                )) != 1
-                {
-                    die!(c"Can't write to op_socket".as_ptr());
-                }
-                if !(op != PRIV_SEP_OP_DONE as libc::c_int as libc::c_uint) {
-                    break;
-                }
+            fn handle_priv_op<'fd, 'buf>(
+                fd: BorrowedFd<'fd>,
+                buffer: &'buf mut [u8],
+            ) -> Result<(bool, &'buf mut [u8]), ()> {
+                let bytes = nix_retry!(nix::unistd::read(fd.as_raw_fd(), &mut buffer[..]))
+                    .map_err(|_| ())?;
+                let msg: PrivilegedOp = postcard::from_bytes(&buffer[..bytes]).map_err(|_| ())?;
+
+                let end = matches!(msg, PrivilegedOp::Done);
+                let ret = privileged_op(-1, msg);
+                buffer.fill(0);
+
+                postcard::to_slice(&ret, &mut buffer[..])
+                    .map_err(|_| ())
+                    .map(|b| (end, b))
             }
-            retry!(waitpid(child, &mut status, 0) as libc::c_long);
+
+            let unpriv_socket = unsafe { OwnedFd::from_raw_fd(privsep_sockets[0]) };
+            let mut buffer = vec![0; 8096];
+            let _ = nix::unistd::close(privsep_sockets[1]);
+            loop {
+                let (end, buf) = match handle_priv_op(unpriv_socket.as_fd(), &mut buffer[..]) {
+                    Ok(o) => o,
+                    Err(()) => (
+                        true,
+                        postcard::to_slice(
+                            &Result::<(), _>::Err(
+                                PrivilegedOpError::PrivilegedProcessCommunicationError,
+                            ),
+                            &mut buffer[..],
+                        )
+                        .unwrap(),
+                    ),
+                };
+                let Ok(_) = nix_retry!(nix::unistd::write(unpriv_socket.as_fd(), buf)) else {
+                    break;
+                };
+                if end {
+                    break;
+                };
+            }
+
+            let _ = nix_retry!(nix::sys::wait::waitpid(
+                Some(nix::unistd::Pid::from_raw(child)),
+                None
+            ));
         }
     } else {
         setup_newroot(opt_unshare_pid, -1);
