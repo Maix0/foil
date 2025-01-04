@@ -1,23 +1,23 @@
-use std::ffi::{CStr, OsStr};
+use std::ffi::OsString;
 use std::num::NonZeroUsize;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
 
 use ::libc;
-use bitflags::Flags;
-use libc::{fcntl, printf, uintmax_t, AT_FDCWD, MNT_DETACH, MS_MGC_VAL, S_IFDIR};
+use libc::{AT_FDCWD, MNT_DETACH, MS_MGC_VAL};
+use nix::sys::stat::Mode;
 use privilged_op::{PrivilegedOp, PrivilegedOpError};
+
+use crate::setup_newroot::setup_newroot;
 
 use crate::*;
 use crate::{
-    bind_mount::bind_mount,
     types::*,
     utils::{
-        copy_file_data, create_file, create_pid_socketpair, die_unless_label_valid, ensure_dir,
-        ensure_file, fdwalk, fork_intermediate_child, get_file_mode, get_newroot_path,
-        label_create_file, label_exec, load_file_data, mkdir_with_parents, pivot_root, raw_clone,
-        read_pid_from_socket, send_pid_on_socket, strappend, strappend_escape_for_mount_options,
-        strconcat, strconcat3, write_file_at, write_to_fd, xcalloc, xclearenv, xsetenv, xunsetenv,
+        create_pid_socketpair, die_unless_label_valid, fdwalk, fork_intermediate_child,
+        label_create_file, label_exec, load_file_data, pivot_root, raw_clone, read_pid_from_socket,
+        send_pid_on_socket, write_file_at, write_to_fd, xcalloc, xclearenv, xsetenv, xunsetenv,
     },
 };
 
@@ -31,36 +31,289 @@ pub struct NsInfo {
     pub id: ino_t,
 }
 
-pub type SetupOpType = libc::c_uint;
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub enum SetupOpType {
+    Chmod,
+    SetHostname,
+    RemountRoNoRecursive,
+    MakeSymlink,
+    MakeRoBindFile,
+    MakeBindFile,
+    MakeFile,
+    MakeDir,
+    MountMqueue,
+    MountTmpfs,
+    MountDev,
+    MountProc,
+    OverlaySrc,
+    RoOverlayMount,
+    TmpOverlayMount,
+    OverlayMount,
+    DevBindMount,
+    RoBindMount,
+    BindMount,
+}
 
-pub const SETUP_CHMOD: SetupOpType = 18;
-pub const SETUP_SET_HOSTNAME: SetupOpType = 17;
-pub const SETUP_REMOUNT_RO_NO_RECURSIVE: SetupOpType = 16;
-pub const SETUP_MAKE_SYMLINK: SetupOpType = 15;
-pub const SETUP_MAKE_RO_BIND_FILE: SetupOpType = 14;
-pub const SETUP_MAKE_BIND_FILE: SetupOpType = 13;
-pub const SETUP_MAKE_FILE: SetupOpType = 12;
-pub const SETUP_MAKE_DIR: SetupOpType = 11;
-pub const SETUP_MOUNT_MQUEUE: SetupOpType = 10;
-pub const SETUP_MOUNT_TMPFS: SetupOpType = 9;
-pub const SETUP_MOUNT_DEV: SetupOpType = 8;
-pub const SETUP_MOUNT_PROC: SetupOpType = 7;
-pub const SETUP_OVERLAY_SRC: SetupOpType = 6;
-pub const SETUP_RO_OVERLAY_MOUNT: SetupOpType = 5;
-pub const SETUP_TMP_OVERLAY_MOUNT: SetupOpType = 4;
-pub const SETUP_OVERLAY_MOUNT: SetupOpType = 3;
-pub const SETUP_DEV_BIND_MOUNT: SetupOpType = 2;
-pub const SETUP_RO_BIND_MOUNT: SetupOpType = 1;
-pub const SETUP_BIND_MOUNT: SetupOpType = 0;
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+    pub struct  SetupOpFlag: u32 {
+        const ALLOW_NOTEXIST = 1;
+        const NO_CREATE_DEST = 2;
+    }
+}
 
-pub type SetupOpFlag = libc::c_uint;
-pub const ALLOW_NOTEXIST: SetupOpFlag = 2;
-pub const NO_CREATE_DEST: SetupOpFlag = 1;
+#[derive(Debug, Clone)]
+pub enum SetupOp {
+    Chmod {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+    },
+    SetHostname {
+        hostname: OsString,
+    },
+    RemountRoNoRecursive {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+    },
+    MakeSymlink {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+        src: PathBuf,
+    },
+    MakeRoBindFile {
+        create_dest: bool,
+        dest: PathBuf,
+        fd: RawFd,
+        perms: Option<Mode>,
+    },
+    MakeBindFile {
+        create_dest: bool,
+        dest: PathBuf,
+        fd: RawFd,
+        perms: Option<Mode>,
+    },
+    MakeFile {
+        create_dest: bool,
+        dest: PathBuf,
+        fd: RawFd,
+        perms: Option<Mode>,
+    },
+    MakeDir {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+    },
+    MountMqueue {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+    },
+    MountTmpfs {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+        size: Option<NonZeroUsize>,
+    },
+    MountDev {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+    },
+    MountProc {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+    },
+
+    OverlaySrc {
+        src: PathBuf,
+    },
+    RoOverlayMount {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+        src: PathBuf,
+    },
+    TmpOverlayMount {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+        src: PathBuf,
+    },
+    OverlayMount {
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+        src: PathBuf,
+    },
+
+    DevBindMount {
+        allow_not_exist: bool,
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+        src: PathBuf,
+    },
+    RoBindMount {
+        allow_not_exist: bool,
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+        src: PathBuf,
+    },
+    BindMount {
+        allow_not_exist: bool,
+        create_dest: bool,
+        dest: PathBuf,
+        perms: Option<Mode>,
+        src: PathBuf,
+    },
+}
+
+impl SetupOp {
+    pub fn allow_not_exist(&self) -> bool {
+        match self {
+            Self::BindMount {
+                allow_not_exist, ..
+            }
+            | Self::RoBindMount {
+                allow_not_exist, ..
+            }
+            | Self::DevBindMount {
+                allow_not_exist, ..
+            } => *allow_not_exist,
+            _ => false,
+        }
+    }
+
+    pub fn create_dest(&self) -> bool {
+        match self {
+            SetupOp::Chmod { create_dest, .. }
+            | SetupOp::RemountRoNoRecursive { create_dest, .. }
+            | SetupOp::MakeSymlink { create_dest, .. }
+            | SetupOp::MakeRoBindFile { create_dest, .. }
+            | SetupOp::MakeBindFile { create_dest, .. }
+            | SetupOp::MakeFile { create_dest, .. }
+            | SetupOp::MakeDir { create_dest, .. }
+            | SetupOp::MountMqueue { create_dest, .. }
+            | SetupOp::MountTmpfs { create_dest, .. }
+            | SetupOp::MountDev { create_dest, .. }
+            | SetupOp::MountProc { create_dest, .. }
+            | SetupOp::RoOverlayMount { create_dest, .. }
+            | SetupOp::TmpOverlayMount { create_dest, .. }
+            | SetupOp::OverlayMount { create_dest, .. }
+            | SetupOp::DevBindMount { create_dest, .. }
+            | SetupOp::RoBindMount { create_dest, .. }
+            | SetupOp::BindMount { create_dest, .. } => *create_dest,
+            _ => false,
+        }
+    }
+
+    pub fn src_mut(&mut self) -> Option<&mut PathBuf> {
+        match self {
+            SetupOp::OverlaySrc { src }
+            | SetupOp::MakeSymlink { src, .. }
+            | SetupOp::RoOverlayMount { src, .. }
+            | SetupOp::TmpOverlayMount { src, .. }
+            | SetupOp::OverlayMount { src, .. }
+            | SetupOp::DevBindMount { src, .. }
+            | SetupOp::RoBindMount { src, .. }
+            | SetupOp::BindMount { src, .. } => Some(src),
+            _ => None,
+        }
+    }
+
+    pub fn src(&self) -> Option<&PathBuf> {
+        match self {
+            SetupOp::OverlaySrc { src }
+            | SetupOp::MakeSymlink { src, .. }
+            | SetupOp::RoOverlayMount { src, .. }
+            | SetupOp::TmpOverlayMount { src, .. }
+            | SetupOp::OverlayMount { src, .. }
+            | SetupOp::DevBindMount { src, .. }
+            | SetupOp::RoBindMount { src, .. }
+            | SetupOp::BindMount { src, .. } => Some(src),
+            _ => None,
+        }
+    }
+
+    pub fn dest(&self) -> Option<&PathBuf> {
+        match self {
+            SetupOp::Chmod { dest, .. }
+            | SetupOp::RemountRoNoRecursive { dest, .. }
+            | SetupOp::MakeSymlink { dest, .. }
+            | SetupOp::MakeRoBindFile { dest, .. }
+            | SetupOp::MakeBindFile { dest, .. }
+            | SetupOp::MakeFile { dest, .. }
+            | SetupOp::MakeDir { dest, .. }
+            | SetupOp::MountMqueue { dest, .. }
+            | SetupOp::MountTmpfs { dest, .. }
+            | SetupOp::MountDev { dest, .. }
+            | SetupOp::MountProc { dest, .. }
+            | SetupOp::RoOverlayMount { dest, .. }
+            | SetupOp::TmpOverlayMount { dest, .. }
+            | SetupOp::OverlayMount { dest, .. }
+            | SetupOp::DevBindMount { dest, .. }
+            | SetupOp::RoBindMount { dest, .. }
+            | SetupOp::BindMount { dest, .. } => Some(dest),
+            _ => None,
+        }
+    }
+
+    pub fn dest_mut(&mut self) -> Option<&mut PathBuf> {
+        match self {
+            SetupOp::Chmod { dest, .. }
+            | SetupOp::RemountRoNoRecursive { dest, .. }
+            | SetupOp::MakeSymlink { dest, .. }
+            | SetupOp::MakeRoBindFile { dest, .. }
+            | SetupOp::MakeBindFile { dest, .. }
+            | SetupOp::MakeFile { dest, .. }
+            | SetupOp::MakeDir { dest, .. }
+            | SetupOp::MountMqueue { dest, .. }
+            | SetupOp::MountTmpfs { dest, .. }
+            | SetupOp::MountDev { dest, .. }
+            | SetupOp::MountProc { dest, .. }
+            | SetupOp::RoOverlayMount { dest, .. }
+            | SetupOp::TmpOverlayMount { dest, .. }
+            | SetupOp::OverlayMount { dest, .. }
+            | SetupOp::DevBindMount { dest, .. }
+            | SetupOp::RoBindMount { dest, .. }
+            | SetupOp::BindMount { dest, .. } => Some(dest),
+            _ => None,
+        }
+    }
+
+    pub fn perms(&self) -> Option<Mode> {
+        match self {
+            SetupOp::Chmod { perms, .. }
+            | SetupOp::RemountRoNoRecursive { perms, .. }
+            | SetupOp::MakeSymlink { perms, .. }
+            | SetupOp::MakeRoBindFile { perms, .. }
+            | SetupOp::MakeBindFile { perms, .. }
+            | SetupOp::MakeFile { perms, .. }
+            | SetupOp::MakeDir { perms, .. }
+            | SetupOp::MountMqueue { perms, .. }
+            | SetupOp::MountTmpfs { perms, .. }
+            | SetupOp::MountDev { perms, .. }
+            | SetupOp::MountProc { perms, .. }
+            | SetupOp::RoOverlayMount { perms, .. }
+            | SetupOp::TmpOverlayMount { perms, .. }
+            | SetupOp::OverlayMount { perms, .. }
+            | SetupOp::DevBindMount { perms, .. }
+            | SetupOp::RoBindMount { perms, .. }
+            | SetupOp::BindMount { perms, .. } => *perms,
+            _ => None,
+        }
+    }
+}
 
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct _SetupOp {
-    pub type_0: SetupOpType,
+    pub kind: SetupOpType,
     pub source: *const libc::c_char,
     pub dest: *const libc::c_char,
     pub fd: libc::c_int,
@@ -69,8 +322,6 @@ pub struct _SetupOp {
     pub size: size_t,
     pub next: *mut SetupOp,
 }
-
-pub type SetupOp = _SetupOp;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -82,27 +333,6 @@ pub struct _LockFile {
 
 pub type LockFile = _LockFile;
 
-pub type PrivSepOpKind = libc::c_uint;
-pub const PRIV_SEP_OP_SET_HOSTNAME: PrivSepOpKind = 8;
-pub const PRIV_SEP_OP_REMOUNT_RO_NO_RECURSIVE: PrivSepOpKind = 7;
-pub const PRIV_SEP_OP_MQUEUE_MOUNT: PrivSepOpKind = 6;
-pub const PRIV_SEP_OP_DEVPTS_MOUNT: PrivSepOpKind = 5;
-pub const PRIV_SEP_OP_TMPFS_MOUNT: PrivSepOpKind = 4;
-pub const PRIV_SEP_OP_PROC_MOUNT: PrivSepOpKind = 3;
-pub const PRIV_SEP_OP_OVERLAY_MOUNT: PrivSepOpKind = 2;
-pub const PRIV_SEP_OP_BIND_MOUNT: PrivSepOpKind = 1;
-pub const PRIV_SEP_OP_DONE: PrivSepOpKind = 0;
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct PrivSepOp {
-    pub op: u32,
-    pub flags: bind_mount::BindOptions,
-    pub perms: u32,
-    pub size_arg: size_t,
-    pub arg1_offset: u32,
-    pub arg2_offset: u32,
-}
 #[derive(Copy, Clone)]
 #[repr(C)]
 
@@ -219,7 +449,7 @@ static mut ns_infos: [NsInfo; 7] = unsafe {
     ]
 };
 
-static mut ops: *mut SetupOp = std::ptr::null_mut() as *mut SetupOp;
+pub static mut ops: *mut SetupOp = std::ptr::null_mut() as *mut SetupOp;
 #[inline]
 
 unsafe fn _op_append_new() -> *mut SetupOp {
@@ -237,7 +467,7 @@ static mut last_op: *mut SetupOp = std::ptr::null_mut() as *mut SetupOp;
 
 unsafe fn setup_op_new(type_0: SetupOpType) -> *mut SetupOp {
     let op = _op_append_new();
-    (*op).type_0 = type_0;
+    (*op).kind = type_0;
     (*op).fd = -1;
     (*op).flags = 0;
     return op;
@@ -952,527 +1182,8 @@ unsafe fn write_uid_gid_map(
     }
 }
 
-unsafe fn setup_newroot(unshare_pid: bool, privileged_op_socket: libc::c_int) {
-    let mut op = 0 as *mut SetupOp;
-    let mut tmp_overlay_idx = 0;
-    let mut current_block_161: u64;
-    op = ops;
-    while !op.is_null() {
-        let mut source = std::ptr::null_mut() as *mut libc::c_char;
-        let mut dest = std::ptr::null_mut() as *mut libc::c_char;
-        let mut source_mode = 0;
-        let mut i: libc::c_uint = 0;
-        if !((*op).source).is_null()
-            && (*op).type_0 != SETUP_MAKE_SYMLINK as libc::c_int as libc::c_uint
-        {
-            source = get_oldroot_path((*op).source);
-            source_mode = get_file_mode(source);
-            if source_mode < 0 {
-                if (*op).flags as libc::c_uint & ALLOW_NOTEXIST as libc::c_int as libc::c_uint != 0
-                    && errno!() == ENOENT
-                {
-                    current_block_161 = 16668937799742929182;
-                } else {
-                    die_with_error!(c"Can't get type of source %s".as_ptr(), (*op).source,);
-                }
-            } else {
-                current_block_161 = 3276175668257526147;
-            }
-        } else {
-            current_block_161 = 3276175668257526147;
-        }
-        match current_block_161 {
-            3276175668257526147 => {
-                if !((*op).dest).is_null()
-                    && (*op).flags as libc::c_uint & NO_CREATE_DEST as libc::c_int as libc::c_uint
-                        == 0
-                {
-                    let mut parent_mode = 0o755;
-                    if (*op).perms >= 0 && (*op).perms & 0o70 == 0 {
-                        parent_mode &= !(0o50);
-                    }
-                    if (*op).perms >= 0 && (*op).perms & 0o7 == 0 {
-                        parent_mode &= !(0o5);
-                    }
-                    dest = get_newroot_path((*op).dest);
-                    if mkdir_with_parents(dest, parent_mode, false) != 0 {
-                        die_with_error!(c"Can't mkdir parents for %s".as_ptr(), (*op).dest,);
-                    }
-                }
-                static mut cover_proc_dirs: [*const libc::c_char; 4] = [
-                    c"sys".as_ptr(),
-                    c"sysrq-trigger".as_ptr(),
-                    c"irq".as_ptr(),
-                    c"bus".as_ptr(),
-                ];
-                static mut devnodes: [*const libc::c_char; 6] = [
-                    c"null".as_ptr(),
-                    c"zero".as_ptr(),
-                    c"full".as_ptr(),
-                    c"random".as_ptr(),
-                    c"urandom".as_ptr(),
-                    c"tty".as_ptr(),
-                ];
-                static mut stdionodes: [*const libc::c_char; 3] =
-                    [c"stdin".as_ptr(), c"stdout".as_ptr(), c"stderr".as_ptr()];
-                match (*op).type_0 {
-                    1 | 2 | 0 => {
-                        if source_mode == S_IFDIR as i32 {
-                            if ensure_dir(dest, 0o755) != 0 {
-                                die_with_error!(c"Can't mkdir %s".as_ptr(), (*op).dest,);
-                            }
-                        } else if ensure_file(dest, 0o444) != 0 {
-                            die_with_error!(c"Can't create file at %s".as_ptr(), (*op).dest,);
-                        }
-                        privileged_op(
-                            privileged_op_socket,
-                            PrivilegedOp::BindMount {
-                                src: OsString![source].into(),
-                                dest: OsString![dest].into(),
-                                flags: if (*op).type_0 == SETUP_RO_BIND_MOUNT {
-                                    BindOptions::BIND_READONLY
-                                } else {
-                                    BindOptions::empty()
-                                } | if (*op).type_0 == SETUP_DEV_BIND_MOUNT {
-                                    BindOptions::BIND_DEVICES
-                                } else {
-                                    BindOptions::empty()
-                                },
-                            },
-                        );
-                        if (*op).fd >= 0 {
-                            let mut fd_st = std::mem::zeroed();
-                            let mut mount_st = std::mem::zeroed();
-                            if fstat((*op).fd, &mut fd_st) != 0 {
-                                die_with_error!(c"Can't stat fd %d".as_ptr(), (*op).fd,);
-                            }
-                            if lstat(dest, &mut mount_st) != 0 {
-                                die_with_error!(c"Can't stat mount at %s".as_ptr(), dest,);
-                            }
-                            if fd_st.st_ino != mount_st.st_ino || fd_st.st_dev != mount_st.st_dev {
-                                die_with_error!(c"Race condition binding dirfd".as_ptr()
-                                    as *const u8
-                                    as *const libc::c_char,);
-                            }
-                            close((*op).fd);
-                            (*op).fd = -1;
-                        }
-                    }
-                    3 | 5 | 4 => {
-                        let mut sb = {
-                            let init = StringBuilder {
-                                buf: 0 as *mut libc::c_char,
-                                size: 0,
-                                offset: 0,
-                            };
-                            init
-                        };
-                        let mut multi_src = false;
-                        if ensure_dir(dest, 0o755) != 0 {
-                            die_with_error!(c"Can't mkdir %s".as_ptr(), (*op).dest,);
-                        }
-                        if !((*op).source).is_null() {
-                            strappend(&mut sb, c"upperdir=/oldroot".as_ptr());
-                            strappend_escape_for_mount_options(&mut sb, (*op).source);
-                            strappend(&mut sb, c",workdir=/oldroot".as_ptr());
-                            op = (*op).next;
-                            strappend_escape_for_mount_options(&mut sb, (*op).source);
-                            strappend(&mut sb, c",".as_ptr());
-                        } else if (*op).type_0
-                            == SETUP_TMP_OVERLAY_MOUNT as libc::c_int as libc::c_uint
-                        {
-                            let fresh3 = tmp_overlay_idx;
-                            tmp_overlay_idx = tmp_overlay_idx + 1;
-                            strappendf(
-                                &mut sb as *mut StringBuilder,
-                                c"upperdir=/tmp-overlay-upper-%1$d,workdir=/tmp-overlay-work-%1$d,"
-                                    .as_ptr() as *const u8
-                                    as *const libc::c_char,
-                                fresh3,
-                            );
-                        }
-                        strappend(&mut sb, c"lowerdir=/oldroot".as_ptr());
-                        while !((*op).next).is_null()
-                            && (*(*op).next).type_0
-                                == SETUP_OVERLAY_SRC as libc::c_int as libc::c_uint
-                        {
-                            op = (*op).next;
-                            if multi_src {
-                                strappend(&mut sb, c":/oldroot".as_ptr());
-                            }
-                            strappend_escape_for_mount_options(&mut sb, (*op).source);
-                            multi_src = true;
-                        }
-                        strappend(&mut sb, c",userxattr".as_ptr());
-                        privileged_op(
-                            privileged_op_socket,
-                            PrivilegedOp::OverlayMount {
-                                path: OsString![dest].into(),
-                                options: OsString![sb.buf],
-                            },
-                        );
-                        free(sb.buf as *mut libc::c_void);
-                    }
-                    16 => {
-                        privileged_op(
-                            privileged_op_socket,
-                            PrivilegedOp::ReadOnlyRemount {
-                                path: OsString![dest].into(),
-                            },
-                        );
-                    }
-                    7 => {
-                        if ensure_dir(dest, 0o755) != 0 {
-                            die_with_error!(c"Can't mkdir %s".as_ptr(), (*op).dest,);
-                        }
-                        if unshare_pid as libc::c_int != 0 || opt_pidns_fd != -1 {
-                            privileged_op(
-                                privileged_op_socket,
-                                PrivilegedOp::ProcMount {
-                                    path: OsString![dest].into(),
-                                },
-                            );
-                        } else {
-                            privileged_op(
-                                privileged_op_socket,
-                                PrivilegedOp::BindMount {
-                                    src: OsString![c"oldroot/proc".as_ptr()].into(),
-                                    dest: OsString![dest].into(),
-                                    flags: BindOptions::empty(),
-                                },
-                            );
-                        }
-                        i = 0;
-                        while (i as libc::c_ulong)
-                            < (::core::mem::size_of::<[*const libc::c_char; 4]>() as libc::c_ulong)
-                                .wrapping_div(
-                                    ::core::mem::size_of::<*const libc::c_char>() as libc::c_ulong
-                                )
-                        {
-                            let subdir =
-                                strconcat3(dest, c"/".as_ptr(), cover_proc_dirs[i as usize]);
-                            if access(subdir, W_OK) < 0 {
-                                if !(errno!() == libc::EACCES
-                                    || errno!() == libc::ENOENT
-                                    || errno!() == libc::EROFS)
-                                {
-                                    die_with_error!(c"Can't access %s".as_ptr(), subdir,);
-                                }
-                            } else {
-                                privileged_op(
-                                    privileged_op_socket,
-                                    PrivilegedOp::BindMount {
-                                        src: OsString![subdir].into(),
-                                        dest: OsString![subdir].into(),
-                                        flags: BindOptions::BIND_READONLY,
-                                    },
-                                );
-                            }
-                            i = i.wrapping_add(1);
-                        }
-                    }
-                    8 => {
-                        if ensure_dir(dest, 0o755) != 0 {
-                            die_with_error!(c"Can't mkdir %s".as_ptr(), (*op).dest,);
-                        }
-                        privileged_op(
-                            privileged_op_socket,
-                            PrivilegedOp::TmpfsMount {
-                                size: None,
-                                perms: 0o755,
-                                path: OsString![dest].into(),
-                            },
-                        );
-                        i = 0;
-                        while (i as libc::c_ulong)
-                            < (::core::mem::size_of::<[*const libc::c_char; 6]>() as libc::c_ulong)
-                                .wrapping_div(
-                                    ::core::mem::size_of::<*const libc::c_char>() as libc::c_ulong
-                                )
-                        {
-                            let node_dest = strconcat3(dest, c"/".as_ptr(), devnodes[i as usize]);
-                            let node_src =
-                                strconcat(c"/oldroot/dev/".as_ptr(), devnodes[i as usize]);
-                            if create_file(
-                                node_dest,
-                                0o444,
-                                std::ptr::null_mut() as *const libc::c_char,
-                            ) != 0
-                            {
-                                die_with_error!(
-                                    c"Can't create file %s/%s".as_ptr() as *const u8
-                                        as *const libc::c_char,
-                                    (*op).dest,
-                                    devnodes[i as usize],
-                                );
-                            }
-                            privileged_op(
-                                privileged_op_socket,
-                                PrivilegedOp::BindMount {
-                                    src: OsString![node_src].into(),
-                                    dest: OsString![node_dest].into(),
-                                    flags: BindOptions::BIND_DEVICES,
-                                },
-                            );
-                            i = i.wrapping_add(1);
-                        }
-                        i = 0;
-                        while (i as libc::c_ulong)
-                            < (::core::mem::size_of::<[*const libc::c_char; 3]>() as libc::c_ulong)
-                                .wrapping_div(
-                                    ::core::mem::size_of::<*const libc::c_char>() as libc::c_ulong
-                                )
-                        {
-                            let target = xasprintf(c"/proc/self/fd/%d".as_ptr(), i);
-                            let node_dest_0 =
-                                strconcat3(dest, c"/".as_ptr(), stdionodes[i as usize]);
-                            if symlink(target, node_dest_0) < 0 {
-                                die_with_error!(
-                                    c"Can't create symlink %s/%s".as_ptr() as *const u8
-                                        as *const libc::c_char,
-                                    (*op).dest,
-                                    stdionodes[i as usize],
-                                );
-                            }
-                            i = i.wrapping_add(1);
-                        }
-                        let dev_fd = strconcat(dest, c"/fd".as_ptr());
-                        if symlink(c"/proc/self/fd".as_ptr(), dev_fd) < 0 {
-                            die_with_error!(c"Can't create symlink %s".as_ptr(), dev_fd,);
-                        }
-                        let dev_core = strconcat(dest, c"/core".as_ptr());
-                        if symlink(c"/proc/kcore".as_ptr(), dev_core) < 0 {
-                            die_with_error!(c"Can't create symlink %s".as_ptr(), dev_core,);
-                        }
-                        let pts = strconcat(dest, c"/pts".as_ptr());
-                        let ptmx = strconcat(dest, c"/ptmx".as_ptr());
-                        let shm = strconcat(dest, c"/shm".as_ptr());
-                        if mkdir(shm, 0o755) == -1 {
-                            die_with_error!(c"Can't create %s/shm".as_ptr(), (*op).dest,);
-                        }
-                        if mkdir(pts, 0o755) == -1 {
-                            die_with_error!(c"Can't create %s/devpts".as_ptr(), (*op).dest,);
-                        }
-                        privileged_op(
-                            privileged_op_socket,
-                            PrivilegedOp::DevMount {
-                                path: OsString![pts].into(),
-                            },
-                        );
-                        if symlink(c"pts/ptmx".as_ptr(), ptmx) != 0 {
-                            die_with_error!(
-                                c"Can't make symlink at %s/ptmx".as_ptr() as *const u8
-                                    as *const libc::c_char,
-                                (*op).dest,
-                            );
-                        }
-                        if !host_tty_dev.is_null() && *host_tty_dev as libc::c_int != 0 {
-                            let src_tty_dev = strconcat(c"/oldroot".as_ptr(), host_tty_dev);
-                            let dest_console = strconcat(dest, c"/console".as_ptr());
-                            if create_file(
-                                dest_console,
-                                0o444,
-                                std::ptr::null_mut() as *const libc::c_char,
-                            ) != 0
-                            {
-                                die_with_error!(c"creating %s/console".as_ptr(), (*op).dest,);
-                            }
-                            privileged_op(
-                                privileged_op_socket,
-                                PrivilegedOp::BindMount {
-                                    src: OsString![src_tty_dev].into(),
-                                    dest: OsString![dest_console].into(),
-                                    flags: BindOptions::BIND_DEVICES,
-                                },
-                            );
-                        }
-                    }
-                    9 => {
-                        assert!(!dest.is_null());
-                        assert!((*op).perms >= 0);
-                        assert!((*op).perms <= 0o7777);
-                        if ensure_dir(dest, 0o755) != 0 {
-                            die_with_error!(c"Can't mkdir %s".as_ptr(), (*op).dest,);
-                        }
-                        privileged_op(
-                            privileged_op_socket,
-                            PrivilegedOp::TmpfsMount {
-                                size: NonZeroUsize::new((*op).size),
-                                perms: ((*op).perms) as _,
-                                path: OsString![dest].into(),
-                            },
-                        );
-                    }
-                    10 => {
-                        if ensure_dir(dest, 0o755) != 0 {
-                            die_with_error!(c"Can't mkdir %s".as_ptr(), (*op).dest,);
-                        }
-                        privileged_op(
-                            privileged_op_socket,
-                            PrivilegedOp::MqueueMount {
-                                path: OsString![dest].into(),
-                            },
-                        );
-                    }
-                    11 => {
-                        assert!(!dest.is_null());
-                        assert!((*op).perms >= 0);
-                        assert!((*op).perms <= 0o7777);
-                        if ensure_dir(dest, (*op).perms as mode_t) != 0 {
-                            die_with_error!(c"Can't mkdir %s".as_ptr(), (*op).dest,);
-                        }
-                    }
-                    18 => {
-                        assert!(!((*op).dest).is_null());
-                        assert!(dest.is_null());
-                        dest = get_newroot_path((*op).dest);
-                        assert!(!dest.is_null());
-                        assert!((*op).perms >= 0);
-                        assert!((*op).perms <= 0o7777);
-                        if chmod(dest, (*op).perms as mode_t) != 0 {
-                            die_with_error!(
-                                c"Can't chmod %#o %s".as_ptr(),
-                                (*op).perms,
-                                (*op).dest,
-                            );
-                        }
-                    }
-                    12 => {
-                        let mut dest_fd = -1;
-                        assert!(!dest.is_null());
-                        assert!((*op).perms >= 0);
-                        assert!((*op).perms <= 0o7777);
-                        dest_fd = creat(dest, (*op).perms as mode_t);
-                        if dest_fd == -1 {
-                            die_with_error!(c"Can't create file %s".as_ptr(), (*op).dest,);
-                        }
-                        if copy_file_data((*op).fd, dest_fd) != 0 {
-                            die_with_error!(
-                                c"Can't write data to file %s".as_ptr() as *const u8
-                                    as *const libc::c_char,
-                                (*op).dest,
-                            );
-                        }
-                        close((*op).fd);
-                        (*op).fd = -1;
-                    }
-                    13 | 14 => {
-                        let mut dest_fd_0 = -1;
-                        let mut tempfile: [libc::c_char; 16] =
-                            *::core::mem::transmute::<&[u8; 16], &mut [libc::c_char; 16]>(
-                                b"/bindfileXXXXXX\0",
-                            );
-                        assert!(!dest.is_null());
-                        assert!((*op).perms >= 0);
-                        assert!((*op).perms <= 0o7777);
-                        dest_fd_0 = mkstemp(tempfile.as_mut_ptr());
-                        if dest_fd_0 == -1 {
-                            die_with_error!(
-                                c"Can't create tmpfile for %s".as_ptr() as *const u8
-                                    as *const libc::c_char,
-                                (*op).dest,
-                            );
-                        }
-                        if fchmod(dest_fd_0, (*op).perms as mode_t) != 0 {
-                            die_with_error!(
-                                c"Can't set mode %#o on file to be used for %s".as_ptr()
-                                    as *const u8
-                                    as *const libc::c_char,
-                                (*op).perms,
-                                (*op).dest,
-                            );
-                        }
-                        if copy_file_data((*op).fd, dest_fd_0) != 0 {
-                            die_with_error!(
-                                c"Can't write data to file %s".as_ptr() as *const u8
-                                    as *const libc::c_char,
-                                (*op).dest,
-                            );
-                        }
-                        close((*op).fd);
-                        (*op).fd = -1;
-                        assert!(!dest.is_null());
-                        if ensure_file(dest, 0o444) != 0 {
-                            die_with_error!(c"Can't create file at %s".as_ptr(), (*op).dest,);
-                        }
-                        privileged_op(
-                            privileged_op_socket,
-                            privilged_op::PrivilegedOp::BindMount {
-                                src: OsString![tempfile.as_mut_ptr()].into(),
-                                dest: OsString![dest].into(),
-                                flags: (if (*op).type_0
-                                    == SETUP_MAKE_RO_BIND_FILE as libc::c_int as libc::c_uint
-                                {
-                                    BindOptions::BIND_READONLY
-                                } else {
-                                    BindOptions::empty()
-                                }),
-                            },
-                        );
-                        unlink(tempfile.as_mut_ptr());
-                    }
-                    15 => {
-                        assert!(!((*op).source).is_null());
-                        if symlink((*op).source, dest) != 0 {
-                            if errno!() == libc::EEXIST {
-                                let existing = readlink_malloc(dest);
-                                if existing.is_null() {
-                                    if errno!() == libc::EINVAL {
-                                        die!(
-                                            c"Can't make symlink at %s: destination exists and is not a symlink".as_ptr()
-                                                as *const u8 as *const libc::c_char,
-                                            (*op).dest,
-                                        );
-                                    } else {
-                                        die_with_error!(
-                                            c"Can't make symlink at %s: destination exists, and cannot read symlink target".as_ptr()
-                                                as *const u8 as *const libc::c_char,
-                                            (*op).dest,
-                                        );
-                                    }
-                                }
-                                if !(strcmp(existing, (*op).source) == 0) {
-                                    die!(
-                                        c"Can't make symlink at %s: existing destination is %s"
-                                            .as_ptr()
-                                            as *const u8
-                                            as *const libc::c_char,
-                                        (*op).dest,
-                                        existing,
-                                    );
-                                }
-                            } else {
-                                die_with_error!(
-                                    c"Can't make symlink at %s".as_ptr() as *const u8
-                                        as *const libc::c_char,
-                                    (*op).dest,
-                                );
-                            }
-                        }
-                    }
-                    17 => {
-                        assert!(!((*op).dest).is_null());
-                        privileged_op(
-                            privileged_op_socket,
-                            privilged_op::PrivilegedOp::SetHostname {
-                                name: OsString![(*op).dest],
-                            },
-                        );
-                    }
-                    6 | _ => {
-                        die!(c"Unexpected type %d".as_ptr(), (*op).type_0,);
-                    }
-                }
-            }
-            _ => {}
-        }
-        op = (*op).next;
-    }
-    privileged_op(privileged_op_socket, privilged_op::PrivilegedOp::Done);
-}
-
 unsafe fn close_ops_fd() {
-    let mut op = 0 as *mut SetupOp;
+    let mut op = std::ptr::null_mut();
     op = ops;
     while !op.is_null() {
         if (*op).fd != -1 {
@@ -1488,7 +1199,7 @@ unsafe fn resolve_symlinks_in_ops() {
     op = ops;
     while !op.is_null() {
         let mut old_source = 0 as *const libc::c_char;
-        match (*op).type_0 {
+        match (*op).kind {
             1 | 2 | 0 | 6 | 3 => {
                 old_source = (*op).source;
                 (*op).source = realpath(old_source, std::ptr::null_mut() as *mut libc::c_char);
@@ -1509,9 +1220,9 @@ unsafe fn resolve_symlinks_in_ops() {
     }
 }
 
-unsafe fn print_version_and_exit() -> ! {
-    printf(c"%s\n".as_ptr(), PACKAGE_STRING.as_ptr());
-    exit(0);
+fn print_version_and_exit() -> ! {
+    unsafe { libc::printf(c"%s\n".as_ptr(), PACKAGE_STRING.as_ptr()) };
+    std::process::exit(0);
 }
 
 unsafe fn is_modifier_option(option: *const libc::c_char) -> libc::c_int {
