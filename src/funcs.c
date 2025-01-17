@@ -15,34 +15,6 @@ size_t xmul(size_t a, size_t b);
 void die_with_error_proxy(char *);
 void die_oom(void);
 
-typedef struct StringBuilder StringBuilder;
-
-void strappendf(StringBuilder *dest, const char *fmt, ...) {
-  va_list args;
-  int len;
-  size_t new_offset;
-
-  va_start(args, fmt);
-  len =
-      vsnprintf(dest->str + dest->offset, dest->size - dest->offset, fmt, args);
-  va_end(args);
-  if (len < 0)
-    die_with_error_proxy("vsnprintf");
-  new_offset = xadd(dest->offset, len);
-  if (new_offset >= dest->size) {
-    dest->size = xmul(xadd(new_offset, 1), 2);
-    dest->str = xrealloc(dest->str, dest->size);
-    va_start(args, fmt);
-    len = vsnprintf(dest->str + dest->offset, dest->size - dest->offset, fmt,
-                    args);
-    va_end(args);
-    if (len < 0)
-      die_with_error_proxy("vsnprintf");
-  }
-
-  dest->offset = new_offset;
-}
-
 char *xasprintf(const char *format, ...) {
   char *buffer = NULL;
   va_list args;

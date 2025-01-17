@@ -1,12 +1,15 @@
-use std::ffi::OsString;
+use std::ffi::{CStr, OsStr, OsString};
 use std::num::NonZeroUsize;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::ptr;
 
 use ::libc;
-use libc::{AT_FDCWD, MNT_DETACH, MS_MGC_VAL};
+use libc::{fcntl, AT_FDCWD, MNT_DETACH, MS_MGC_VAL};
+use nix::errno::Errno;
 use nix::sys::stat::Mode;
+use nix::NixPath;
 use privilged_op::{PrivilegedOp, PrivilegedOpError};
 
 use crate::setup_newroot::setup_newroot;
@@ -62,10 +65,9 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum SetupOp {
     Chmod {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
     },
@@ -73,78 +75,66 @@ pub enum SetupOp {
         hostname: OsString,
     },
     RemountRoNoRecursive {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
     },
     MakeSymlink {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
         src: PathBuf,
     },
     MakeRoBindFile {
-        create_dest: bool,
         dest: PathBuf,
-        fd: RawFd,
+        fd: OwnedFd,
         perms: Option<Mode>,
     },
     MakeBindFile {
-        create_dest: bool,
         dest: PathBuf,
-        fd: RawFd,
+        fd: OwnedFd,
         perms: Option<Mode>,
     },
     MakeFile {
-        create_dest: bool,
         dest: PathBuf,
-        fd: RawFd,
+        fd: OwnedFd,
         perms: Option<Mode>,
     },
     MakeDir {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
     },
     MountMqueue {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
     },
     MountTmpfs {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
         size: Option<NonZeroUsize>,
     },
     MountDev {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
     },
     MountProc {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
     },
 
     OverlaySrc {
+        allow_not_exist: bool,
         src: PathBuf,
     },
     RoOverlayMount {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
         src: PathBuf,
     },
     TmpOverlayMount {
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
-        src: PathBuf,
     },
     OverlayMount {
-        create_dest: bool,
+        allow_not_exist: bool,
         dest: PathBuf,
         perms: Option<Mode>,
         src: PathBuf,
@@ -152,21 +142,18 @@ pub enum SetupOp {
 
     DevBindMount {
         allow_not_exist: bool,
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
         src: PathBuf,
     },
     RoBindMount {
         allow_not_exist: bool,
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
         src: PathBuf,
     },
     BindMount {
         allow_not_exist: bool,
-        create_dest: bool,
         dest: PathBuf,
         perms: Option<Mode>,
         src: PathBuf,
@@ -189,35 +176,11 @@ impl SetupOp {
         }
     }
 
-    pub fn create_dest(&self) -> bool {
-        match self {
-            SetupOp::Chmod { create_dest, .. }
-            | SetupOp::RemountRoNoRecursive { create_dest, .. }
-            | SetupOp::MakeSymlink { create_dest, .. }
-            | SetupOp::MakeRoBindFile { create_dest, .. }
-            | SetupOp::MakeBindFile { create_dest, .. }
-            | SetupOp::MakeFile { create_dest, .. }
-            | SetupOp::MakeDir { create_dest, .. }
-            | SetupOp::MountMqueue { create_dest, .. }
-            | SetupOp::MountTmpfs { create_dest, .. }
-            | SetupOp::MountDev { create_dest, .. }
-            | SetupOp::MountProc { create_dest, .. }
-            | SetupOp::RoOverlayMount { create_dest, .. }
-            | SetupOp::TmpOverlayMount { create_dest, .. }
-            | SetupOp::OverlayMount { create_dest, .. }
-            | SetupOp::DevBindMount { create_dest, .. }
-            | SetupOp::RoBindMount { create_dest, .. }
-            | SetupOp::BindMount { create_dest, .. } => *create_dest,
-            _ => false,
-        }
-    }
-
     pub fn src_mut(&mut self) -> Option<&mut PathBuf> {
         match self {
-            SetupOp::OverlaySrc { src }
+            SetupOp::OverlaySrc { src, .. }
             | SetupOp::MakeSymlink { src, .. }
             | SetupOp::RoOverlayMount { src, .. }
-            | SetupOp::TmpOverlayMount { src, .. }
             | SetupOp::OverlayMount { src, .. }
             | SetupOp::DevBindMount { src, .. }
             | SetupOp::RoBindMount { src, .. }
@@ -228,10 +191,9 @@ impl SetupOp {
 
     pub fn src(&self) -> Option<&PathBuf> {
         match self {
-            SetupOp::OverlaySrc { src }
+            SetupOp::OverlaySrc { src, .. }
             | SetupOp::MakeSymlink { src, .. }
             | SetupOp::RoOverlayMount { src, .. }
-            | SetupOp::TmpOverlayMount { src, .. }
             | SetupOp::OverlayMount { src, .. }
             | SetupOp::DevBindMount { src, .. }
             | SetupOp::RoBindMount { src, .. }
@@ -775,43 +737,20 @@ unsafe fn monitor_child(
 
 unsafe fn do_init(event_fd: libc::c_int, initial_pid: pid_t) -> libc::c_int {
     let mut initial_exit_status = 1;
-    let mut lock = 0 as *mut LockFile;
-    lock = lock_files;
+    let mut lock = lock_files;
     while !lock.is_null() {
-        let fd = ({
-            let mut __result: libc::c_long = 0;
-            loop {
-                __result = open((*lock).path, 0 | 0o2000000) as libc::c_long;
-                if !(__result == -1 && errno!() == libc::EINTR) {
-                    break;
-                }
-            }
-            __result
-        }) as libc::c_int;
+        let fd = retry!(open((*lock).path, 0o2000000));
         if fd == -1 {
             die_with_error!(c"Unable to open lock file %s".as_ptr(), (*lock).path,);
         }
-        let mut l = {
-            let init = flock {
-                l_type: libc::F_RDLCK as libc::c_short,
-                l_whence: libc::SEEK_SET as libc::c_short,
-                l_start: 0,
-                l_len: 0,
-                l_pid: 0,
-            };
-            init
+        let mut l = flock {
+            l_type: libc::F_RDLCK as libc::c_short,
+            l_whence: libc::SEEK_SET as libc::c_short,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
         };
-        if ({
-            let mut __result: libc::c_long = 0;
-            loop {
-                __result = fcntl(fd, 6, &mut l as *mut flock) as libc::c_long;
-                if !(__result == -1 && errno!() == libc::EINTR) {
-                    break;
-                }
-            }
-            __result
-        }) < 0
-        {
+        if retry!(fcntl(fd, 6, &mut l as *mut flock)) < 0 {
             die_with_error!(c"Unable to lock file %s".as_ptr(), (*lock).path,);
         }
         (*lock).fd = fd;
@@ -822,28 +761,12 @@ unsafe fn do_init(event_fd: libc::c_int, initial_pid: pid_t) -> libc::c_int {
     loop {
         let mut child: pid_t = 0;
         let mut status: libc::c_int = 0;
-        child = ({
-            let mut __result: libc::c_long = 0;
-            loop {
-                __result = wait(&mut status) as libc::c_long;
-                if !(__result == -1 && errno!() == libc::EINTR) {
-                    break;
-                }
-            }
-            __result
-        }) as pid_t;
+        child = retry!(wait(&mut status));
         if child == initial_pid {
             initial_exit_status = propagate_exit_status(status);
             if event_fd != -1 {
                 let mut val = (initial_exit_status + 1) as u64;
-                let _res: isize = {
-                    loop {
-                        let __result = write(event_fd, &raw mut val as *const libc::c_void, 8);
-                        if !(__result == -1 && errno!() == libc::EINTR) {
-                            break __result as _;
-                        }
-                    }
-                };
+                let _res: isize = retry!(write(event_fd, &raw mut val as *const libc::c_void, 8));
             }
         }
         if !(child == -1 && errno!() != libc::EINTR) {
@@ -879,21 +802,16 @@ pub const REQUIRED_CAPS_0: libc::c_long = (1) << (21 & 31)
 pub const REQUIRED_CAPS_1: libc::c_int = 0;
 
 unsafe fn set_required_caps() {
-    let mut hdr = {
-        let init = __user_cap_header_struct {
-            version: _LINUX_CAPABILITY_VERSION_3 as u32,
-            pid: 0,
-        };
-        init
+    let mut hdr = __user_cap_header_struct {
+        version: _LINUX_CAPABILITY_VERSION_3 as u32,
+        pid: 0,
     };
+
     let mut data: [__user_cap_data_struct; 2] = [
-        {
-            let init = __user_cap_data_struct {
-                effective: 0,
-                permitted: 0,
-                inheritable: 0,
-            };
-            init
+        __user_cap_data_struct {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
         },
         __user_cap_data_struct {
             effective: 0,
@@ -913,21 +831,16 @@ unsafe fn set_required_caps() {
 }
 
 unsafe fn drop_all_caps(keep_requested_caps: bool) {
-    let mut hdr = {
-        let init = __user_cap_header_struct {
-            version: _LINUX_CAPABILITY_VERSION_3 as u32,
-            pid: 0,
-        };
-        init
+    let mut hdr = __user_cap_header_struct {
+        version: _LINUX_CAPABILITY_VERSION_3 as u32,
+        pid: 0,
     };
+
     let mut data: [__user_cap_data_struct; 2] = [
-        {
-            let init = __user_cap_data_struct {
-                effective: 0,
-                permitted: 0,
-                inheritable: 0,
-            };
-            init
+        __user_cap_data_struct {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
         },
         __user_cap_data_struct {
             effective: 0,
@@ -957,21 +870,16 @@ unsafe fn drop_all_caps(keep_requested_caps: bool) {
 }
 
 unsafe fn has_caps() -> bool {
-    let mut hdr = {
-        let init = __user_cap_header_struct {
-            version: _LINUX_CAPABILITY_VERSION_3 as u32,
-            pid: 0,
-        };
-        init
+    let mut hdr = __user_cap_header_struct {
+        version: _LINUX_CAPABILITY_VERSION_3 as u32,
+        pid: 0,
     };
+
     let mut data: [__user_cap_data_struct; 2] = [
-        {
-            let init = __user_cap_data_struct {
-                effective: 0,
-                permitted: 0,
-                inheritable: 0,
-            };
-            init
+        __user_cap_data_struct {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
         },
         __user_cap_data_struct {
             effective: 0,
@@ -1182,41 +1090,59 @@ unsafe fn write_uid_gid_map(
     }
 }
 
-unsafe fn close_ops_fd() {
-    let mut op = std::ptr::null_mut();
-    op = ops;
-    while !op.is_null() {
-        if (*op).fd != -1 {
-            close((*op).fd);
-            (*op).fd = -1;
-        }
-        op = (*op).next;
-    }
-}
-
-unsafe fn resolve_symlinks_in_ops() {
-    let mut op = 0 as *mut SetupOp;
-    op = ops;
-    while !op.is_null() {
-        let mut old_source = 0 as *const libc::c_char;
-        match (*op).kind {
-            1 | 2 | 0 | 6 | 3 => {
-                old_source = (*op).source;
-                (*op).source = realpath(old_source, std::ptr::null_mut() as *mut libc::c_char);
-                if ((*op).source).is_null() {
-                    if (*op).flags as libc::c_uint & ALLOW_NOTEXIST as libc::c_int as libc::c_uint
-                        != 0
-                        && errno!() == ENOENT
-                    {
-                        (*op).source = old_source;
-                    } else {
-                        die_with_error!(c"Can't find source path %s".as_ptr(), old_source,);
+fn resolve_symlinks_in_ops(op_list: &mut [SetupOp]) {
+    for op in op_list {
+        match op {
+            SetupOp::RoBindMount {
+                allow_not_exist,
+                src,
+                ..
+            }
+            | SetupOp::DevBindMount {
+                allow_not_exist,
+                src,
+                ..
+            }
+            | SetupOp::BindMount {
+                allow_not_exist,
+                src,
+                ..
+            }
+            | SetupOp::OverlaySrc {
+                allow_not_exist,
+                src,
+                ..
+            }
+            | SetupOp::OverlayMount {
+                allow_not_exist,
+                src,
+                ..
+            } => {
+                let old_src = std::mem::take(src);
+                let real_path_raw = match old_src.with_nix_path(|p| {
+                    match unsafe { libc::realpath(p.as_ptr(), ptr::null_mut()) } {
+                        p if p.is_null() => Err(Errno::last()),
+                        p => Ok(p),
+                    }
+                }) {
+                    Err(e) | Ok(Err(e)) => Err(e),
+                    Ok(Ok(p)) => Ok(p),
+                };
+                match real_path_raw {
+                    Err(Errno::ENOENT) if *allow_not_exist => *src = old_src,
+                    Err(e) => panic!("Can't find source path for {}: {e}", old_src.display()),
+                    Ok(p) => {
+                        // safety: the ptr is not null (would be an Err(e)), and is a valid Cstr,
+                        // since it is the garenty of realpath if the last argument is NULL (the
+                        // will be malloc'ed, meaning that we need to free it)
+                        let cstr = unsafe { CStr::from_ptr(p) };
+                        *src = PathBuf::from(OsStr::from_bytes(cstr.to_bytes()));
+                        unsafe { libc::free(p.cast()) };
                     }
                 }
             }
-            5 | 4 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | _ => {}
+            _ => {}
         }
-        op = (*op).next;
     }
 }
 
@@ -1248,927 +1174,6 @@ unsafe fn make_setup_overlay_src_ops(argv: *const *const libc::c_char) {
         i += 1;
     }
     next_overlay_src_count = 0;
-}
-
-unsafe fn parse_args_recurse(
-    argcp: *mut libc::c_int,
-    argvp: *mut *mut *const libc::c_char,
-    in_file: bool,
-    total_parsed_argc_p: *mut libc::c_int,
-) {
-    let mut op = 0 as *mut SetupOp;
-    let mut argc = *argcp;
-    let mut argv = *argvp;
-    static mut MAX_ARGS: i32 = 9000;
-    if *total_parsed_argc_p > MAX_ARGS {
-        die!(
-            c"Exceeded maximum number of arguments %u".as_ptr(),
-            MAX_ARGS,
-        );
-    }
-    while argc > 0 {
-        let arg = *argv.offset(0);
-        if strcmp(arg, c"--help".as_ptr()) == 0 {
-            usage(EXIT_SUCCESS, stdout);
-        } else if strcmp(arg, c"--version".as_ptr()) == 0 {
-            print_version_and_exit();
-        } else if strcmp(arg, c"--args".as_ptr()) == 0 {
-            let mut the_fd: libc::c_int = 0;
-            let mut endptr = 0 as *mut libc::c_char;
-            let mut p = 0 as *const libc::c_char;
-            let mut data_end = 0 as *const libc::c_char;
-            let mut data_len: size_t = 0;
-            let mut data_argv = std::ptr::null_mut() as *mut *const libc::c_char;
-            let mut data_argv_copy = 0 as *mut *const libc::c_char;
-            let mut data_argc: libc::c_int = 0;
-            let mut i: libc::c_int = 0;
-            if in_file {
-                die!(c"--args not supported in arguments file".as_ptr());
-            }
-            if argc < 2 {
-                die!(c"--args takes an argument".as_ptr());
-            }
-            the_fd = strtol(*argv.offset(1), &mut endptr, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr.offset(0) as libc::c_int != 0
-                || the_fd < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_args_data = load_file_data(the_fd, &mut data_len);
-            if opt_args_data.is_null() {
-                die_with_error!(c"Can't read --args data".as_ptr());
-            }
-            close(the_fd);
-            data_end = opt_args_data.offset(data_len as isize);
-            data_argc = 0;
-            p = opt_args_data;
-            while !p.is_null() && p < data_end {
-                data_argc += 1;
-                *total_parsed_argc_p += 1;
-                if *total_parsed_argc_p > MAX_ARGS {
-                    die!(
-                        c"Exceeded maximum number of arguments %u".as_ptr() as *const u8
-                            as *const libc::c_char,
-                        MAX_ARGS,
-                    );
-                }
-                p = memchr(
-                    p as *const libc::c_void,
-                    0,
-                    (data_end).offset_from(p) as usize,
-                ) as *const libc::c_char;
-                if !p.is_null() {
-                    p = p.offset(1);
-                }
-            }
-            data_argv = xcalloc(
-                (data_argc + 1) as size_t,
-                ::core::mem::size_of::<*mut libc::c_char>(),
-            ) as *mut *const libc::c_char;
-            i = 0;
-            p = opt_args_data;
-            while !p.is_null() && p < data_end {
-                let fresh4 = i;
-                i = i + 1;
-                let ref mut fresh5 = *data_argv.offset(fresh4 as _);
-                *fresh5 = p;
-                p = memchr(
-                    p as *const libc::c_void,
-                    0,
-                    data_end.offset_from(p) as usize,
-                ) as *const libc::c_char;
-                if !p.is_null() {
-                    p = p.offset(1);
-                }
-            }
-            data_argv_copy = data_argv;
-            parse_args_recurse(
-                &mut data_argc,
-                &mut data_argv_copy,
-                true,
-                total_parsed_argc_p,
-            );
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--argv0".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--argv0 takes one argument".as_ptr());
-            }
-            if !opt_argv0.is_null() {
-                die!(c"--argv0 used multiple times".as_ptr());
-            }
-            opt_argv0 = *argv.offset(1);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--level-prefix".as_ptr()) == 0 {
-            bwrap_level_prefix = true;
-        } else if strcmp(arg, c"--unshare-all".as_ptr()) == 0 {
-            opt_unshare_net = true;
-            opt_unshare_cgroup_try = opt_unshare_net;
-            opt_unshare_uts = opt_unshare_cgroup_try;
-            opt_unshare_pid = opt_unshare_uts;
-            opt_unshare_ipc = opt_unshare_pid;
-            opt_unshare_user_try = opt_unshare_ipc;
-        } else if strcmp(arg, c"--unshare-user".as_ptr()) == 0 {
-            opt_unshare_user = true;
-        } else if strcmp(arg, c"--unshare-user-try".as_ptr()) == 0 {
-            opt_unshare_user_try = true;
-        } else if strcmp(arg, c"--unshare-ipc".as_ptr()) == 0 {
-            opt_unshare_ipc = true;
-        } else if strcmp(arg, c"--unshare-pid".as_ptr()) == 0 {
-            opt_unshare_pid = true;
-        } else if strcmp(arg, c"--unshare-net".as_ptr()) == 0 {
-            opt_unshare_net = true;
-        } else if strcmp(arg, c"--unshare-uts".as_ptr()) == 0 {
-            opt_unshare_uts = true;
-        } else if strcmp(arg, c"--unshare-cgroup".as_ptr()) == 0 {
-            opt_unshare_cgroup = true;
-        } else if strcmp(arg, c"--unshare-cgroup-try".as_ptr()) == 0 {
-            opt_unshare_cgroup_try = true;
-        } else if strcmp(arg, c"--share-net".as_ptr()) == 0 {
-            opt_unshare_net = false;
-        } else if strcmp(arg, c"--chdir".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--chdir takes one argument".as_ptr());
-            }
-            if !opt_chdir_path.is_null() {
-                warn_only_last_option(c"--chdir".as_ptr());
-            }
-            opt_chdir_path = *argv.offset(1);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--disable-userns".as_ptr()) == 0 {
-            opt_disable_userns = true;
-        } else if strcmp(arg, c"--assert-userns-disabled".as_ptr()) == 0 {
-            opt_assert_userns_disabled = true;
-        } else if strcmp(arg, c"--remount-ro".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--remount-ro takes one argument".as_ptr());
-            }
-            op = setup_op_new(SETUP_REMOUNT_RO_NO_RECURSIVE);
-            (*op).dest = *argv.offset(1);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--bind".as_ptr()) == 0 || strcmp(arg, c"--bind-try".as_ptr()) == 0 {
-            if argc < 3 {
-                die!(c"%s takes two arguments".as_ptr(), arg,);
-            }
-            op = setup_op_new(SETUP_BIND_MOUNT);
-            (*op).source = *argv.offset(1);
-            (*op).dest = *argv.offset(2);
-            if strcmp(arg, c"--bind-try".as_ptr()) == 0 {
-                (*op).flags = ALLOW_NOTEXIST;
-            }
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--ro-bind".as_ptr()) == 0
-            || strcmp(arg, c"--ro-bind-try".as_ptr()) == 0
-        {
-            if argc < 3 {
-                die!(c"%s takes two arguments".as_ptr(), arg,);
-            }
-            op = setup_op_new(SETUP_RO_BIND_MOUNT);
-            (*op).source = *argv.offset(1);
-            (*op).dest = *argv.offset(2);
-            if strcmp(arg, c"--ro-bind-try".as_ptr()) == 0 {
-                (*op).flags = ALLOW_NOTEXIST;
-            }
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--dev-bind".as_ptr()) == 0
-            || strcmp(arg, c"--dev-bind-try".as_ptr()) == 0
-        {
-            if argc < 3 {
-                die!(c"%s takes two arguments".as_ptr(), arg,);
-            }
-            op = setup_op_new(SETUP_DEV_BIND_MOUNT);
-            (*op).source = *argv.offset(1);
-            (*op).dest = *argv.offset(2);
-            if strcmp(arg, c"--dev-bind-try".as_ptr()) == 0 {
-                (*op).flags = ALLOW_NOTEXIST;
-            }
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--bind-fd".as_ptr()) == 0
-            || strcmp(arg, c"--ro-bind-fd".as_ptr()) == 0
-        {
-            let mut src_fd: libc::c_int = 0;
-            let mut endptr_0 = 0 as *mut libc::c_char;
-            if argc < 3 {
-                die!(c"--bind-fd takes two arguments".as_ptr());
-            }
-            src_fd = strtol(*argv.offset(1), &mut endptr_0, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_0.offset(0) as libc::c_int != 0
-                || src_fd < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            if strcmp(arg, c"--ro-bind-fd".as_ptr()) == 0 {
-                op = setup_op_new(SETUP_RO_BIND_MOUNT);
-            } else {
-                op = setup_op_new(SETUP_BIND_MOUNT);
-            }
-            (*op).source = xasprintf(c"/proc/self/fd/%d".as_ptr(), src_fd);
-            (*op).fd = src_fd;
-            (*op).dest = *argv.offset(2);
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--overlay-src".as_ptr()) == 0 {
-            if is_privileged {
-                die!(
-                    c"The --overlay-src option is not permitted in setuid mode".as_ptr()
-                        as *const u8 as *const libc::c_char,
-                );
-            }
-            next_overlay_src_count += 1;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--overlay".as_ptr()) == 0 {
-            let mut workdir_op = 0 as *mut SetupOp;
-            if is_privileged {
-                die!(
-                    c"The --overlay option is not permitted in setuid mode".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            if argc < 4 {
-                die!(c"--overlay takes three arguments".as_ptr());
-            }
-            if next_overlay_src_count < 1 {
-                die!(
-                    c"--overlay requires at least one --overlay-src".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            op = setup_op_new(SETUP_OVERLAY_MOUNT);
-            (*op).source = *argv.offset(1);
-            workdir_op = setup_op_new(SETUP_OVERLAY_SRC);
-            (*workdir_op).source = *argv.offset(2);
-            (*op).dest = *argv.offset(3);
-            make_setup_overlay_src_ops(argv);
-            argv = argv.offset(3);
-            argc -= 3;
-        } else if strcmp(arg, c"--tmp-overlay".as_ptr()) == 0 {
-            if is_privileged {
-                die!(
-                    c"The --tmp-overlay option is not permitted in setuid mode".as_ptr()
-                        as *const u8 as *const libc::c_char,
-                );
-            }
-            if argc < 2 {
-                die!(c"--tmp-overlay takes an argument".as_ptr());
-            }
-            if next_overlay_src_count < 1 {
-                die!(
-                    c"--tmp-overlay requires at least one --overlay-src".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            op = setup_op_new(SETUP_TMP_OVERLAY_MOUNT);
-            (*op).dest = *argv.offset(1);
-            make_setup_overlay_src_ops(argv);
-            opt_tmp_overlay_count += 1;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--ro-overlay".as_ptr()) == 0 {
-            if is_privileged {
-                die!(
-                    c"The --ro-overlay option is not permitted in setuid mode".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            if argc < 2 {
-                die!(c"--ro-overlay takes an argument".as_ptr());
-            }
-            if next_overlay_src_count < 2 {
-                die!(
-                    c"--ro-overlay requires at least two --overlay-src".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            op = setup_op_new(SETUP_RO_OVERLAY_MOUNT);
-            (*op).dest = *argv.offset(1);
-            make_setup_overlay_src_ops(argv);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--proc".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--proc takes an argument".as_ptr());
-            }
-            op = setup_op_new(SETUP_MOUNT_PROC);
-            (*op).dest = *argv.offset(1);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--exec-label".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--exec-label takes an argument".as_ptr());
-            }
-            if !opt_exec_label.is_null() {
-                warn_only_last_option(c"--exec-label".as_ptr());
-            }
-            opt_exec_label = *argv.offset(1);
-            die_unless_label_valid(opt_exec_label);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--file-label".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--file-label takes an argument".as_ptr());
-            }
-            if !opt_file_label.is_null() {
-                warn_only_last_option(c"--file-label".as_ptr());
-            }
-            opt_file_label = *argv.offset(1);
-            die_unless_label_valid(opt_file_label);
-            if label_create_file(opt_file_label) != 0 {
-                die_with_error!(c"--file-label setup failed".as_ptr());
-            }
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--dev".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--dev takes an argument".as_ptr());
-            }
-            op = setup_op_new(SETUP_MOUNT_DEV);
-            (*op).dest = *argv.offset(1);
-            opt_needs_devpts = true;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--tmpfs".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--tmpfs takes an argument".as_ptr());
-            }
-            op = setup_op_new(SETUP_MOUNT_TMPFS);
-            (*op).dest = *argv.offset(1);
-            if next_perms >= 0 {
-                (*op).perms = next_perms;
-            } else {
-                (*op).perms = 0o755;
-            }
-            next_perms = -1;
-            (*op).size = next_size_arg;
-            next_size_arg = 0;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--mqueue".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--mqueue takes an argument".as_ptr());
-            }
-            op = setup_op_new(SETUP_MOUNT_MQUEUE);
-            (*op).dest = *argv.offset(1);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--dir".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--dir takes an argument".as_ptr());
-            }
-            op = setup_op_new(SETUP_MAKE_DIR);
-            (*op).dest = *argv.offset(1);
-            if next_perms >= 0 {
-                (*op).perms = next_perms;
-            } else {
-                (*op).perms = 0o755;
-            }
-            next_perms = -1;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--file".as_ptr()) == 0 {
-            let mut file_fd: libc::c_int = 0;
-            let mut endptr_1 = 0 as *mut libc::c_char;
-            if argc < 3 {
-                die!(c"--file takes two arguments".as_ptr());
-            }
-            file_fd = strtol(*argv.offset(1), &mut endptr_1, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_1.offset(0) as libc::c_int != 0
-                || file_fd < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            op = setup_op_new(SETUP_MAKE_FILE);
-            (*op).fd = file_fd;
-            (*op).dest = *argv.offset(2);
-            if next_perms >= 0 {
-                (*op).perms = next_perms;
-            } else {
-                (*op).perms = 0o666;
-            }
-            next_perms = -1;
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--bind-data".as_ptr()) == 0 {
-            let mut file_fd_0: libc::c_int = 0;
-            let mut endptr_2 = 0 as *mut libc::c_char;
-            if argc < 3 {
-                die!(c"--bind-data takes two arguments".as_ptr());
-            }
-            file_fd_0 = strtol(*argv.offset(1), &mut endptr_2, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_2.offset(0) as libc::c_int != 0
-                || file_fd_0 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            op = setup_op_new(SETUP_MAKE_BIND_FILE);
-            (*op).fd = file_fd_0;
-            (*op).dest = *argv.offset(2);
-            if next_perms >= 0 {
-                (*op).perms = next_perms;
-            } else {
-                (*op).perms = 0o600;
-            }
-            next_perms = -1;
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--ro-bind-data".as_ptr()) == 0 {
-            let mut file_fd_1: libc::c_int = 0;
-            let mut endptr_3 = 0 as *mut libc::c_char;
-            if argc < 3 {
-                die!(c"--ro-bind-data takes two arguments".as_ptr());
-            }
-            file_fd_1 = strtol(*argv.offset(1), &mut endptr_3, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_3.offset(0) as libc::c_int != 0
-                || file_fd_1 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            op = setup_op_new(SETUP_MAKE_RO_BIND_FILE);
-            (*op).fd = file_fd_1;
-            (*op).dest = *argv.offset(2);
-            if next_perms >= 0 {
-                (*op).perms = next_perms;
-            } else {
-                (*op).perms = 0o600;
-            }
-            next_perms = -1;
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--symlink".as_ptr()) == 0 {
-            if argc < 3 {
-                die!(c"--symlink takes two arguments".as_ptr());
-            }
-            op = setup_op_new(SETUP_MAKE_SYMLINK);
-            (*op).source = *argv.offset(1);
-            (*op).dest = *argv.offset(2);
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--lock-file".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--lock-file takes an argument".as_ptr());
-            }
-            lock_file_new(*argv.offset(1));
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--sync-fd".as_ptr()) == 0 {
-            let mut the_fd_0: libc::c_int = 0;
-            let mut endptr_4 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--sync-fd takes an argument".as_ptr());
-            }
-            if opt_sync_fd != -1 {
-                warn_only_last_option(c"--sync-fd".as_ptr());
-            }
-            the_fd_0 = strtol(*argv.offset(1), &mut endptr_4, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_4.offset(0) as libc::c_int != 0
-                || the_fd_0 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_sync_fd = the_fd_0;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--block-fd".as_ptr()) == 0 {
-            let mut the_fd_1: libc::c_int = 0;
-            let mut endptr_5 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--block-fd takes an argument".as_ptr());
-            }
-            if opt_block_fd != -1 {
-                warn_only_last_option(c"--block-fd".as_ptr());
-            }
-            the_fd_1 = strtol(*argv.offset(1), &mut endptr_5, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_5.offset(0) as libc::c_int != 0
-                || the_fd_1 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_block_fd = the_fd_1;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--userns-block-fd".as_ptr()) == 0 {
-            let mut the_fd_2: libc::c_int = 0;
-            let mut endptr_6 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--userns-block-fd takes an argument".as_ptr());
-            }
-            if opt_userns_block_fd != -1 {
-                warn_only_last_option(c"--userns-block-fd".as_ptr());
-            }
-            the_fd_2 = strtol(*argv.offset(1), &mut endptr_6, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_6.offset(0) as libc::c_int != 0
-                || the_fd_2 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_userns_block_fd = the_fd_2;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--info-fd".as_ptr()) == 0 {
-            let mut the_fd_3: libc::c_int = 0;
-            let mut endptr_7 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--info-fd takes an argument".as_ptr());
-            }
-            if opt_info_fd != -1 {
-                warn_only_last_option(c"--info-fd".as_ptr());
-            }
-            the_fd_3 = strtol(*argv.offset(1), &mut endptr_7, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_7.offset(0) as libc::c_int != 0
-                || the_fd_3 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_info_fd = the_fd_3;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--json-status-fd".as_ptr()) == 0 {
-            let mut the_fd_4: libc::c_int = 0;
-            let mut endptr_8 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--json-status-fd takes an argument".as_ptr());
-            }
-            if opt_json_status_fd != -1 {
-                warn_only_last_option(c"--json-status-fd".as_ptr());
-            }
-            the_fd_4 = strtol(*argv.offset(1), &mut endptr_8, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_8.offset(0) as libc::c_int != 0
-                || the_fd_4 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_json_status_fd = the_fd_4;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--seccomp".as_ptr()) == 0 {
-            let mut the_fd_5: libc::c_int = 0;
-            let mut endptr_9 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--seccomp takes an argument".as_ptr());
-            }
-            if !seccomp_programs.is_null() {
-                die!(
-                    c"--seccomp cannot be combined with --add-seccomp-fd".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            if opt_seccomp_fd != -1 {
-                warn_only_last_option(c"--seccomp".as_ptr());
-            }
-            the_fd_5 = strtol(*argv.offset(1), &mut endptr_9, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_9.offset(0) as libc::c_int != 0
-                || the_fd_5 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_seccomp_fd = the_fd_5;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--add-seccomp-fd".as_ptr()) == 0 {
-            let mut the_fd_6: libc::c_int = 0;
-            let mut endptr_10 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--add-seccomp-fd takes an argument".as_ptr());
-            }
-            if opt_seccomp_fd != -1 {
-                die!(
-                    c"--add-seccomp-fd cannot be combined with --seccomp".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            the_fd_6 = strtol(*argv.offset(1), &mut endptr_10, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_10.offset(0) as libc::c_int != 0
-                || the_fd_6 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            seccomp_program_new(&mut the_fd_6);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--userns".as_ptr()) == 0 {
-            let mut the_fd_7: libc::c_int = 0;
-            let mut endptr_11 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--userns takes an argument".as_ptr());
-            }
-            if opt_userns_fd != -1 {
-                warn_only_last_option(c"--userns".as_ptr());
-            }
-            the_fd_7 = strtol(*argv.offset(1), &mut endptr_11, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_11.offset(0) as libc::c_int != 0
-                || the_fd_7 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_userns_fd = the_fd_7;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--userns2".as_ptr()) == 0 {
-            let mut the_fd_8: libc::c_int = 0;
-            let mut endptr_12 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--userns2 takes an argument".as_ptr());
-            }
-            if opt_userns2_fd != -1 {
-                warn_only_last_option(c"--userns2".as_ptr());
-            }
-            the_fd_8 = strtol(*argv.offset(1), &mut endptr_12, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_12.offset(0) as libc::c_int != 0
-                || the_fd_8 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_userns2_fd = the_fd_8;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--pidns".as_ptr()) == 0 {
-            let mut the_fd_9: libc::c_int = 0;
-            let mut endptr_13 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--pidns takes an argument".as_ptr());
-            }
-            if opt_pidns_fd != -1 {
-                warn_only_last_option(c"--pidns".as_ptr());
-            }
-            the_fd_9 = strtol(*argv.offset(1), &mut endptr_13, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_13.offset(0) as libc::c_int != 0
-                || the_fd_9 < 0
-            {
-                die!(c"Invalid fd: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_pidns_fd = the_fd_9;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--clearenv".as_ptr()) == 0 {
-            xclearenv();
-        } else if strcmp(arg, c"--setenv".as_ptr()) == 0 {
-            if argc < 3 {
-                die!(c"--setenv takes two arguments".as_ptr());
-            }
-            xsetenv(*argv.offset(1), *argv.offset(2), 1);
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--unsetenv".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--unsetenv takes an argument".as_ptr());
-            }
-            xunsetenv(*argv.offset(1));
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--uid".as_ptr()) == 0 {
-            let mut the_uid: libc::c_int = 0;
-            let mut endptr_14 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--uid takes an argument".as_ptr());
-            }
-            if opt_sandbox_uid != uid_t::MAX {
-                warn_only_last_option(c"--uid".as_ptr());
-            }
-            the_uid = strtol(*argv.offset(1), &mut endptr_14, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_14.offset(0) as libc::c_int != 0
-                || the_uid < 0
-            {
-                die!(c"Invalid uid: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_sandbox_uid = the_uid as uid_t;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--gid".as_ptr()) == 0 {
-            let mut the_gid: libc::c_int = 0;
-            let mut endptr_15 = 0 as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--gid takes an argument".as_ptr());
-            }
-            if opt_sandbox_gid != gid_t::MAX {
-                warn_only_last_option(c"--gid".as_ptr());
-            }
-            the_gid = strtol(*argv.offset(1), &mut endptr_15, 10) as libc::c_int;
-            if *(*argv.offset(1)).offset(0) as libc::c_int == 0
-                || *endptr_15.offset(0) as libc::c_int != 0
-                || the_gid < 0
-            {
-                die!(c"Invalid gid: %s".as_ptr(), *argv.offset(1),);
-            }
-            opt_sandbox_gid = the_gid as gid_t;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--hostname".as_ptr()) == 0 {
-            if argc < 2 {
-                die!(c"--hostname takes an argument".as_ptr());
-            }
-            if !opt_sandbox_hostname.is_null() {
-                warn_only_last_option(c"--hostname".as_ptr());
-            }
-            op = setup_op_new(SETUP_SET_HOSTNAME);
-            (*op).dest = *argv.offset(1);
-            (*op).flags = NO_CREATE_DEST;
-            opt_sandbox_hostname = *argv.offset(1);
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--new-session".as_ptr()) == 0 {
-            opt_new_session = true;
-        } else if strcmp(arg, c"--die-with-parent".as_ptr()) == 0 {
-            opt_die_with_parent = true;
-        } else if strcmp(arg, c"--as-pid-1".as_ptr()) == 0 {
-            opt_as_pid_1 = true;
-        } else if strcmp(arg, c"--cap-add".as_ptr()) == 0 {
-            let mut cap: cap_value_t = 0;
-            if argc < 2 {
-                die!(c"--cap-add takes an argument".as_ptr());
-            }
-            opt_cap_add_or_drop_used = true;
-            if strcasecmp(*argv.offset(1), c"ALL".as_ptr()) == 0 {
-                requested_caps[1] = 0xffffffff as libc::c_uint;
-                requested_caps[0] = requested_caps[1];
-            } else {
-                if cap_from_name(*argv.offset(1), &mut cap) < 0 {
-                    die!(c"unknown cap: %s".as_ptr(), *argv.offset(1),);
-                }
-                if cap < 32 {
-                    requested_caps[0] =
-                        (requested_caps[0] as libc::c_long | (1) << (cap & 31)) as u32;
-                } else {
-                    requested_caps[1] =
-                        (requested_caps[1] as libc::c_long | (1) << (cap - 32 - 32 & 31)) as u32;
-                }
-            }
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--cap-drop".as_ptr()) == 0 {
-            let mut cap_0: cap_value_t = 0;
-            if argc < 2 {
-                die!(c"--cap-drop takes an argument".as_ptr());
-            }
-            opt_cap_add_or_drop_used = true;
-            if strcasecmp(*argv.offset(1), c"ALL".as_ptr()) == 0 {
-                requested_caps[1] = 0;
-                requested_caps[0] = requested_caps[1];
-            } else {
-                if cap_from_name(*argv.offset(1), &mut cap_0) < 0 {
-                    die!(c"unknown cap: %s".as_ptr(), *argv.offset(1),);
-                }
-                if cap_0 < 32 {
-                    requested_caps[0] =
-                        (requested_caps[0] as libc::c_long & !((1) << (cap_0 & 31))) as u32;
-                } else {
-                    requested_caps[1] = (requested_caps[1] as libc::c_long
-                        & !((1) << (cap_0 - 32 - 32 & 31)))
-                        as u32;
-                }
-            }
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--perms".as_ptr()) == 0 {
-            let mut perms: libc::c_ulong = 0;
-            let mut endptr_16 = std::ptr::null_mut() as *mut libc::c_char;
-            if argc < 2 {
-                die!(c"--perms takes an argument".as_ptr());
-            }
-            if next_perms != -1 {
-                die!(
-                    c"--perms given twice for the same action".as_ptr() as *const u8
-                        as *const libc::c_char
-                );
-            }
-            perms = strtoul(*argv.offset(1), &mut endptr_16, 8);
-            if *(*argv.offset(1)).offset(0) as libc::c_int == '\0' as i32
-                || endptr_16.is_null()
-                || *endptr_16 != '\0' as i8
-                || perms > 0o7777
-            {
-                die!(
-                    c"--perms takes an octal argument <= 07777".as_ptr() as *const u8
-                        as *const libc::c_char
-                );
-            }
-            next_perms = perms as libc::c_int;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--size".as_ptr()) == 0 {
-            let mut size: libc::c_ulonglong = 0;
-            let mut endptr_17 = std::ptr::null_mut() as *mut libc::c_char;
-            if is_privileged {
-                die!(
-                    c"The --size option is not permitted in setuid mode".as_ptr() as *const u8
-                        as *const libc::c_char,
-                );
-            }
-            if argc < 2 {
-                die!(c"--size takes an argument".as_ptr());
-            }
-            if next_size_arg != 0 {
-                die!(c"--size given twice for the same action".as_ptr());
-            }
-            errno!() = 0;
-            size = strtoull(*argv.offset(1), &mut endptr_17, 0);
-            if errno!() != 0
-                || libc::isdigit(*(*argv.offset(1)) as i32) as libc::c_int as libc::c_ushort
-                    as libc::c_int
-                    == 0
-                || endptr_17.is_null()
-                || *endptr_17 != '\0' as i8
-                || size == 0
-            {
-                die!(
-                    c"--size takes a non-zero number of bytes".as_ptr() as *const u8
-                        as *const libc::c_char
-                );
-            }
-            if size > privilged_op::MAX_TMPFS_BYTES.get() as _ {
-                die!(
-                    c"--size (for tmpfs) is limited to %zu".as_ptr(),
-                    privilged_op::MAX_TMPFS_BYTES,
-                );
-            }
-            next_size_arg = size as size_t;
-            argv = argv.offset(1);
-            argc -= 1;
-        } else if strcmp(arg, c"--chmod".as_ptr()) == 0 {
-            let mut perms_0: libc::c_ulong = 0;
-            let mut endptr_18 = std::ptr::null_mut() as *mut libc::c_char;
-            if argc < 3 {
-                die!(c"--chmod takes two arguments".as_ptr());
-            }
-            perms_0 = strtoul(*argv.offset(1), &mut endptr_18, 8);
-            if *(*argv.offset(1)).offset(0) as libc::c_int == '\0' as i32
-                || endptr_18.is_null()
-                || *endptr_18 != '\0' as i8
-                || perms_0 > 0o7777
-            {
-                die!(
-                    c"--chmod takes an octal argument <= 07777".as_ptr() as *const u8
-                        as *const libc::c_char
-                );
-            }
-            op = setup_op_new(SETUP_CHMOD);
-            (*op).flags = NO_CREATE_DEST;
-            (*op).perms = perms_0 as _;
-            (*op).dest = *argv.offset(2);
-            argv = argv.offset(2);
-            argc -= 2;
-        } else if strcmp(arg, c"--".as_ptr()) == 0 {
-            argv = argv.offset(1);
-            argc -= 1;
-            break;
-        } else {
-            if !(*arg as libc::c_int == '-' as i32) {
-                break;
-            }
-            die!(c"Unknown option %s".as_ptr(), arg,);
-        }
-        if is_modifier_option(arg) == 0 && next_perms >= 0 {
-            die!(
-                c"--perms must be followed by an option that creates a file".as_ptr() as *const u8
-                    as *const libc::c_char,
-            );
-        }
-        if is_modifier_option(arg) == 0 && next_size_arg != 0 {
-            die!(c"--size must be followed by --tmpfs".as_ptr());
-        }
-        if strcmp(arg, c"--overlay-src".as_ptr()) != 0 && next_overlay_src_count > 0 {
-            die!(
-                c"--overlay-src must be followed by another --overlay-src or one of --overlay, --tmp-overlay, or --ro-overlay".as_ptr()
-                    as *const u8 as *const libc::c_char,
-            );
-        }
-        argv = argv.offset(1);
-        argc -= 1;
-    }
-    *argcp = argc;
-    *argvp = argv;
-}
-
-unsafe fn parse_args(argcp: *mut libc::c_int, argvp: *mut *mut *const libc::c_char) {
-    let mut total_parsed_argc = *argcp;
-    parse_args_recurse(argcp, argvp, false, &mut total_parsed_argc);
-    if next_overlay_src_count > 0 {
-        die!(
-            c"--overlay-src must be followed by another --overlay-src or one of --overlay, --tmp-overlay, or --ro-overlay".as_ptr()
-                as *const u8 as *const libc::c_char,
-        );
-    }
 }
 
 unsafe fn read_overflowids() {
@@ -2726,7 +1731,6 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     } else {
         setup_newroot(opt_unshare_pid, -1);
     }
-    close_ops_fd();
     if mount(
         c"oldroot".as_ptr(),
         c"oldroot".as_ptr(),
@@ -2851,18 +1855,15 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             let mut dont_close: [libc::c_int; 3] = [0; 3];
             let mut j = 0;
             if event_fd != -1 {
-                let fresh6 = j;
+                dont_close[j] = event_fd;
                 j = j + 1;
-                dont_close[fresh6] = event_fd;
             }
             if opt_sync_fd != -1 {
-                let fresh7 = j;
+                dont_close[j] = opt_sync_fd;
                 j = j + 1;
-                dont_close[fresh7] = opt_sync_fd;
             }
-            let fresh8 = j;
+            dont_close[j] = -1;
             j = j + 1;
-            dont_close[fresh8] = -1;
             fdwalk(
                 proc_fd,
                 Some(close_extra_fds as unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int),

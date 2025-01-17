@@ -1,9 +1,12 @@
 use std::ffi::{CStr, OsStr, OsString};
-use std::os::fd::{AsFd as _, AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::num::NonZeroUsize;
+use std::os::fd::{AsFd as _, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::unreachable;
 
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+use std::task::RawWaker;
 
 use crate::retry;
 use crate::types::{SetupOpFlag, SetupOpType};
@@ -17,15 +20,64 @@ use crate::{
     OsString,
 };
 
+use bitflags::Flags;
 use bstr::{BStr, ByteSlice};
+use nix::errno::Errno;
+use nix::sys::socket::SetSockOpt;
 use nix::sys::stat::Mode;
+use nix::unistd::AccessFlags;
 use nix::NixPath as _;
 use SetupOpType as ST;
 
-static COVER_PROC_DIR: &'static [&'static CStr] = &[c"sys", c"sysrq-trigger", c"irq", c"bus"];
-static DEV_NODES: &'static [&'static CStr] =
-    &[c"null", c"zero", c"full", c"random", c"urandom", c"tty"];
-static STDIO_NODES: &'static [&'static CStr] = &[c"stdin", c"stdout", c"stderr"];
+macro_rules! push_path {
+    ($base:expr, $($e:expr),* $(,)?) => {
+        {
+        let mut out: std::path::PathBuf = $base;
+        $(
+            out.push($e);
+        )*
+        out
+        }
+    };
+}
+
+static COVER_PROC_DIR: &'static [&'static str] = &["sys", "sysrq-trigger", "irq", "bus"];
+static DEV_NODES: &'static [&'static str] = &["null", "zero", "full", "random", "urandom", "tty"];
+static STDIO_NODES: &'static [&'static str] = &["stdin", "stdout", "stderr"];
+
+fn get_newroot_path_rust(path: impl AsRef<Path>) -> PathBuf {
+    fn _inner(path: &Path) -> PathBuf {
+        let mut out = PathBuf::from("/newroot/");
+        for c in path.components().filter(|c| {
+            !matches!(
+                c,
+                std::path::Component::RootDir | std::path::Component::Prefix(_)
+            )
+        }) {
+            out.push(c)
+        }
+        out
+    }
+
+    _inner(path.as_ref())
+}
+
+fn get_oldroot_path_rust(path: impl AsRef<Path>) -> PathBuf {
+    fn _inner(path: &Path) -> PathBuf {
+        let mut out = PathBuf::from("/oldroot/");
+        for c in path.components().filter(|c| {
+            !matches!(
+                c,
+                std::path::Component::RootDir | std::path::Component::Prefix(_)
+            )
+        }) {
+            out.push(c)
+        }
+        out
+    }
+
+    _inner(path.as_ref())
+}
 
 fn write_options(buf: &mut OsString, options: &BStr) -> std::fmt::Result {
     use std::fmt::Write;
@@ -171,65 +223,98 @@ fn ensure_dir_rust(p: impl AsRef<Path>, mode: Mode) -> nix::Result<()> {
     ensure_dir_inner(p.as_ref(), mode)
 }
 
-pub unsafe fn setup_newroot(ops: &mut [SetupOp], unshare_pid: bool, privileged_op_socket: RawFd) {
+fn copy_file_data_rust(src: BorrowedFd<'_>, dest: BorrowedFd<'_>) -> nix::Result<usize> {
+    let mut buffer = [0u8; 8096];
+    let mut total = 0;
+    loop {
+        let b = match nix::unistd::read(src.as_raw_fd(), &mut buffer[..]) {
+            Ok(n) => {
+                total += n;
+                &buffer[..n]
+            }
+            Err(Errno::EINTR) => continue,
+            Err(e) => return Err(e),
+        };
+        nix::unistd::write(dest, b)?;
+        if b.len() != buffer.len() {
+            return Ok(total);
+        }
+    }
+}
+
+macro_rules! get_src {
+    ($src:expr, $allow_not_exist:expr) => {{
+        match (|src| -> nix::Result<_> {
+            let p = oldroot_path(&src);
+            let mode = file_mode(&p)?;
+            Ok((p, mode))
+        })($src)
+        {
+            Ok(s) => s,
+            Err(e) if $allow_not_exist && e == nix::errno::Errno::ENOENT => continue,
+            Err(e) => {
+                panic!("couldn't get mode for {}: {e}", ($src).display());
+            }
+        }
+    }};
+}
+
+macro_rules! get_dest {
+    ($dest:expr, $perms:expr) => {{
+        match (|dest, perms: Option<Mode>| -> std::io::Result<_> {
+            let mut parent_mode = Mode::from_bits_truncate(0o755);
+            if let Some(p) = perms {
+                if !p.contains(Mode::from_bits_truncate(0o070)) {
+                    parent_mode &= !Mode::from_bits_truncate(0o050);
+                }
+                if !p.contains(Mode::from_bits_truncate(0o007)) {
+                    parent_mode &= !Mode::from_bits_truncate(0o005);
+                }
+            }
+            let dest = newroot_path(&dest);
+            mkdir_with_parents_rust(&dest, parent_mode, false)?;
+
+            Ok(dest)
+        })($dest, $perms)
+        {
+            Ok(dest) => dest,
+            Err(e) => panic!("TODO: failed to create dirs: {e}"),
+        }
+    }};
+}
+
+pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_socket: RawFd) {
     let mut tmp_overlay_idx = 0;
-    let mut op_iterator = ops.iter_mut().peekable();
+    let mut op_iterator = ops.iter().peekable();
 
     while let Some(op) = op_iterator.next() {
-        let mut source = std::ptr::null_mut() as *mut libc::c_char;
-
-        let src_ = match op
-            .src()
-            .filter(|_| matches!(op, SetupOp::MakeSymlink { .. }))
-            .map(|src| -> Result<_, nix::errno::Errno> {
-                let p = oldroot_path(&src);
-                Ok((p, file_mode(&p)?))
-            }) {
-            Some(Ok(s)) => Some(s),
-            Some(Err(e)) if op.allow_not_exist() && e == nix::errno::Errno::ENOENT => continue,
-            Some(Err(e)) => {
-                panic!("couldn't get mode for {:?}: {e}", op.src().unwrap());
+        match op {
+            SetupOp::RoBindMount {
+                dest,
+                src,
+                allow_not_exist,
+                perms,
             }
-            None => None,
-        };
-
-        let dest_ = match op
-            .dest()
-            .filter(|_| op.create_dest())
-            .map(|dest| -> std::io::Result<_> {
-                let mut parent_mode = Mode::from_bits_truncate(0o755);
-                if let Some(p) = op.perms() {
-                    if !p.contains(Mode::from_bits_truncate(0o070)) {
-                        parent_mode &= !Mode::from_bits_truncate(0o050);
-                    }
-                    if !p.contains(Mode::from_bits_truncate(0o007)) {
-                        parent_mode &= !Mode::from_bits_truncate(0o005);
-                    }
-                }
-                let dest = newroot_path(&dest);
-                mkdir_with_parents_rust(&dest, parent_mode, false)?;
-
-                Ok(dest)
-            }) {
-            Some(Ok(dest)) => Some(dest),
-            Some(Err(e)) => panic!("TODO: failed to create dirs: {e}"),
-            None => None,
-        };
-
-        match (op, src_, dest_) {
-            (
-                SetupOp::RoBindMount { dest: rdest, .. }
-                | SetupOp::BindMount { dest: rdest, .. }
-                | SetupOp::DevBindMount { dest: rdest, .. },
-                Some((src, src_perms)),
-                Some(dest),
-            ) => {
+            | SetupOp::BindMount {
+                dest,
+                src,
+                allow_not_exist,
+                perms,
+            }
+            | SetupOp::DevBindMount {
+                dest,
+                src,
+                allow_not_exist,
+                perms,
+            } => {
+                let (src, src_perms) = get_src!(src, *allow_not_exist);
+                let dest = get_dest!(dest, *perms);
                 if src_perms.bits() == libc::S_IFDIR {
-                    if let Err(e) = ensure_dir_rust(dest, Mode::from_bits_truncate(0o755)) {
-                        panic!("TODO: Can't mkdir {:?}: {e} ", rdest);
+                    if let Err(e) = ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)) {
+                        panic!("TODO: Can't mkdir {}: {e} ", dest.display());
                     }
-                } else if let Err(e) = ensure_file_rust(dest, Mode::from_bits_truncate(0o444)) {
-                    panic!("TODO: Can't create file {:?}: {e} ", rdest);
+                } else if let Err(e) = ensure_file_rust(&dest, Mode::from_bits_truncate(0o444)) {
+                    panic!("TODO: Can't create file {}: {e} ", dest.display());
                 }
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
@@ -243,43 +328,33 @@ pub unsafe fn setup_newroot(ops: &mut [SetupOp], unshare_pid: bool, privileged_o
                         },
                     },
                 );
-                if op.fd >= 0 {
-                    let mut fd_st = std::mem::zeroed();
-                    let mut mount_st = std::mem::zeroed();
-                    if libc::fstat(op.fd, &mut fd_st) != 0 {
-                        die_with_error!(c"Can't stat fd %d".as_ptr(), op.fd,);
-                    }
-                    if libc::lstat(dest, &mut mount_st) != 0 {
-                        die_with_error!(c"Can't stat mount at %s".as_ptr(), dest,);
-                    }
-                    if fd_st.st_ino != mount_st.st_ino || fd_st.st_dev != mount_st.st_dev {
-                        die_with_error!(c"Race condition binding dirfd".as_ptr() as *const u8
-                            as *const libc::c_char,);
-                    }
-                    libc::close(op.fd);
-                    op.fd = -1;
-                }
             }
-        }
 
-        match op.kind {
-            ST::RoBindMount | ST::DevBindMount | ST::BindMount => {}
-            ST::TmpOverlayMount | ST::RoOverlayMount | ST::OverlayMount => {
+            op @ (SetupOp::RoOverlayMount { dest, perms, .. }
+            | SetupOp::OverlayMount { dest, perms, .. }
+            | SetupOp::TmpOverlayMount { dest, perms }) => {
                 use std::fmt::Write;
                 let mut options = OsString::new();
-                if ensure_dir(dest, 0o755) != 0 {
-                    die_with_error!(c"Can't mkdir %s".as_ptr(), op.dest,);
-                }
-                if !(op.source).is_null() {
+                let dest = get_dest!(dest, *perms);
+                let source = match &op {
+                    SetupOp::TmpOverlayMount { .. } => None,
+                    SetupOp::RoOverlayMount { src, .. } | SetupOp::OverlayMount { src, .. } => {
+                        Some(get_src!(src, false))
+                    }
+                    _ => unreachable!(),
+                };
+                ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755))
+                    .expect("TODO: Can't mkdir dest");
+                if let Some((src, _)) = source.as_ref() {
                     write!(&mut options, "upperdir=/oldroot");
-                    write_options(&mut options, OsString![op.source].as_bytes().into());
+                    write_options(&mut options, src.as_os_str().as_bytes().into());
                     write!(&mut options, ",workdir=/oldroot");
-                    let Some(op) = op_iterator.next() else {
+                    let Some(op_src) = op_iterator.next().map(|o| o.src()).flatten() else {
                         panic!("TODO: buuble up error");
                     };
-                    write_options(&mut options, OsString![op.source].as_bytes().into());
+                    write_options(&mut options, op_src.as_os_str().as_bytes().into());
                     write!(&mut options, ",");
-                } else if op.kind == ST::TmpOverlayMount {
+                } else if let &SetupOp::TmpOverlayMount { .. } = &op {
                     let idx = tmp_overlay_idx;
                     tmp_overlay_idx = tmp_overlay_idx + 1;
                     write!(
@@ -289,103 +364,101 @@ pub unsafe fn setup_newroot(ops: &mut [SetupOp], unshare_pid: bool, privileged_o
                 }
                 write!(&mut options, "lowerdir=/oldroot");
                 let mut multi_src = false;
-                while Some(ST::OverlaySrc) == op_iterator.peek().map(|o| o.kind) {
-                    let Some(op) = op_iterator.next() else {
-                        unreachable!("we just peeked the iterator ?!")
+                while let Some(&SetupOp::OverlaySrc { .. }) = op_iterator.peek() {
+                    let Some(SetupOp::OverlaySrc { src, .. }) = op_iterator.next() else {
+                        unreachable!();
                     };
                     if multi_src {
                         write!(&mut options, ":/oldroot");
                     }
-                    write_options(&mut options, OsString![op.source].as_bytes().into());
+                    write_options(&mut options, src.as_os_str().as_bytes().into());
                     multi_src = true;
+                    let _ = op_iterator.next();
                 }
                 write!(&mut options, ",userxattr");
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
                     PrivilegedOp::OverlayMount {
-                        path: OsString![dest].into(),
+                        path: dest,
                         options,
                     },
                 );
             }
-            ST::RemountRoNoRecursive => {
+            SetupOp::RemountRoNoRecursive { dest, perms } => {
+                let dest = get_dest!(dest, *perms);
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
-                    PrivilegedOp::ReadOnlyRemount {
-                        path: OsString![dest].into(),
-                    },
+                    PrivilegedOp::ReadOnlyRemount { path: dest },
                 );
             }
-            ST::MountProc => {
-                if ensure_dir(dest, 0o755) != 0 {
-                    panic!("Can't mkdir {:?}", unsafe { CStr::from_ptr(op.dest) });
+            SetupOp::MountProc { dest, perms } => {
+                let dest = get_dest!(dest, *perms);
+                if ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)).is_err() {
+                    panic!("Can't mkdir {}", dest.display());
                 }
                 if unshare_pid || crate::types::opt_pidns_fd != -1 {
                     privileged_op(
                         privileged_op_socket.as_raw_fd(),
-                        PrivilegedOp::ProcMount {
-                            path: OsString![dest].into(),
-                        },
+                        PrivilegedOp::ProcMount { path: dest.clone() },
                     );
                 } else {
                     privileged_op(
                         privileged_op_socket.as_raw_fd(),
                         PrivilegedOp::BindMount {
                             src: "oldroot/proc".into(),
-                            dest: OsString![dest].into(),
+                            dest: dest.clone(),
                             flags: BindOptions::empty(),
                         },
                     );
                 }
                 for &elem in COVER_PROC_DIR {
-                    let subdir = crate::types::strconcat3(dest, c"/".as_ptr(), elem.as_ptr());
-                    if libc::access(subdir, libc::W_OK) < 0 {
-                        if !(errno!() == libc::EACCES
-                            || errno!() == libc::ENOENT
-                            || errno!() == libc::EROFS)
-                        {
-                            die_with_error!(c"Can't access %s".as_ptr(), subdir,);
+                    let subdir = push_path!(dest.clone(), elem);
+                    if let Err(e) = nix::unistd::access(subdir.as_path(), AccessFlags::W_OK) {
+                        match e {
+                            Errno::EACCES | Errno::ENOENT | Errno::EROFS => {}
+                            _ => panic!("TODO: Can't access {}: {e}", subdir.display()),
                         }
                     } else {
                         privileged_op(
                             privileged_op_socket.as_raw_fd(),
                             PrivilegedOp::BindMount {
-                                src: OsString![subdir].into(),
-                                dest: OsString![subdir].into(),
+                                src: subdir.clone(),
+                                dest: subdir.clone(),
                                 flags: BindOptions::BIND_READONLY,
                             },
                         );
                     }
                 }
             }
-            ST::MountDev => {
-                if ensure_dir(dest, 0o755) != 0 {
-                    die_with_error!(c"Can't mkdir %s".as_ptr(), op.dest,);
+            SetupOp::MountDev { perms, dest } => {
+                let dest = get_dest!(dest, *perms);
+                if ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)).is_err() {
+                    panic!("Can't mkdir {}", dest.display());
                 }
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
                     PrivilegedOp::TmpfsMount {
                         size: None,
                         perms: 0o755,
-                        path: OsString![dest].into(),
+                        path: dest.clone(),
                     },
                 );
                 for &elem in DEV_NODES {
-                    let node_dest = strconcat3(dest, c"/".as_ptr(), elem.as_ptr());
-                    let node_src = strconcat(c"/oldroot/dev/".as_ptr(), elem.as_ptr());
-                    if create_file(
-                        node_dest,
-                        0o444,
-                        std::ptr::null_mut() as *const libc::c_char,
-                    ) != 0
-                    {
-                        panic!("Can't create file {:?}/{:?}", op.dest, elem);
+                    let node_dest = push_path!(dest.clone(), elem);
+                    let node_src = push_path!("/oldroot/dev/".into(), elem);
+
+                    if let Err(e) = create_file_rust(
+                        &node_dest,
+                        Mode::from_bits_truncate(0o444),
+                        Option::<&[u8]>::None,
+                    ) {
+                        panic!("Can't create file {}/{}: {e}", dest.display(), elem);
                     }
                     privileged_op(
                         privileged_op_socket.as_raw_fd(),
                         PrivilegedOp::BindMount {
-                            src: OsString![node_src].into(),
-                            dest: OsString![node_dest].into(),
+                            src: node_src,
+                            dest: node_dest,
                             flags: BindOptions::BIND_DEVICES,
                         },
                     );
@@ -393,167 +466,149 @@ pub unsafe fn setup_newroot(ops: &mut [SetupOp], unshare_pid: bool, privileged_o
                 for (idx, &elem) in STDIO_NODES.iter().enumerate() {
                     use std::fmt::Write;
                     let mut target = OsString::new();
-                    write!(&mut target, "/proc/self/fd/{idx}");
-                    let real_dest = strconcat3(dest, c"/".as_ptr(), elem.as_ptr());
-                    nix::unistd::symlinkat(target.as_os_str(), None, unsafe {
-                        CStr::from_ptr(real_dest)
-                    })
+                    write!(&mut target, "proc/self/fd/{idx}");
+                    let real_dest = push_path!(dest.clone(), elem);
+                    nix::unistd::symlinkat(target.as_os_str(), None, real_dest.as_path())
+                        .expect("TODO: bubble up error");
+                }
+
+                let dev_fd = push_path!(dest.clone(), "fd");
+                nix::unistd::symlinkat("/proc/self/fd", None, dev_fd.as_path())
                     .expect("TODO: bubble up error");
+                let dev_core = push_path!(dest.clone(), "core");
+                nix::unistd::symlinkat("/proc/kcore", None, dev_core.as_path())
+                    .expect("TODO: bubble up error");
+
+                let pts = push_path!(dest.clone(), "pts");
+                let ptmx = push_path!(dest.clone(), "ptmx");
+                let shm = push_path!(dest.clone(), "shm");
+                if let Err(e) = nix::unistd::mkdir(&shm, Mode::from_bits_truncate(0o755)) {
+                    panic!("TODO: Can't create {}/shm: {e}", dest.display());
                 }
-                let dev_fd = strconcat(dest, c"/fd".as_ptr());
-                if libc::symlink(c"/proc/self/fd".as_ptr(), dev_fd) < 0 {
-                    panic!("Can't create symlink {:?}", unsafe {
-                        CStr::from_ptr(dev_fd)
-                    });
-                }
-                let dev_core = strconcat(dest, c"/core".as_ptr());
-                if libc::symlink(c"/proc/kcore".as_ptr(), dev_core) < 0 {
-                    panic!("Can't create symlink {:?}", unsafe {
-                        CStr::from_ptr(dev_core)
-                    });
-                }
-                let pts = strconcat(dest, c"/pts".as_ptr());
-                let ptmx = strconcat(dest, c"/ptmx".as_ptr());
-                let shm = strconcat(dest, c"/shm".as_ptr());
-                if libc::mkdir(shm, 0o755) == -1 {
-                    die_with_error!(c"Can't create %s/shm".as_ptr(), op.dest,);
-                }
-                if libc::mkdir(pts, 0o755) == -1 {
-                    die_with_error!(c"Can't create %s/devpts".as_ptr(), op.dest,);
+                if let Err(e) = nix::unistd::mkdir(&pts, Mode::from_bits_truncate(0o755)) {
+                    panic!("TODO: Can't create {}/devpts: {e}", dest.display());
                 }
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
-                    PrivilegedOp::DevMount {
-                        path: OsString![pts].into(),
-                    },
+                    PrivilegedOp::DevMount { path: pts },
                 );
-                if libc::symlink(c"pts/ptmx".as_ptr(), ptmx) != 0 {
-                    die_with_error!(c"Can't make symlink at %s/ptmx".as_ptr(), op.dest,);
+                if let Err(e) = nix::unistd::symlinkat(c"pts/ptmx", None, &ptmx) {
+                    panic!("TODO: Can't make symlink at {}/ptmx: {e}", dest.display());
                 }
                 if !crate::types::host_tty_dev.is_null()
                     && *crate::types::host_tty_dev as libc::c_int != 0
                 {
                     let src_tty_dev = strconcat(c"/oldroot".as_ptr(), crate::types::host_tty_dev);
-                    let dest_console = strconcat(dest, c"/console".as_ptr());
-                    if create_file(
-                        dest_console,
-                        0o444,
-                        std::ptr::null_mut() as *const libc::c_char,
-                    ) != 0
-                    {
-                        die_with_error!(c"creating %s/console".as_ptr(), op.dest,);
+                    let dest_console = push_path!(dest.clone(), "console");
+                    if let Err(e) = create_file_rust(
+                        &dest_console,
+                        Mode::from_bits_truncate(0o444),
+                        Option::<&[u8]>::None,
+                    ) {
+                        panic!("creating {}/console: {e}", dest.display());
                     }
                     privileged_op(
                         privileged_op_socket.as_raw_fd(),
                         PrivilegedOp::BindMount {
                             src: OsString![src_tty_dev].into(),
-                            dest: OsString![dest_console].into(),
+                            dest: dest_console,
                             flags: BindOptions::BIND_DEVICES,
                         },
                     );
                 }
             }
-            ST::MountTmpfs => {
-                assert!(!dest.is_null());
-                assert!(op.perms >= 0);
-                assert!(op.perms <= 0o7777);
-                if ensure_dir(dest, 0o755) != 0 {
-                    panic!("Can't mkdir {:?}", unsafe { CStr::from_ptr(op.dest) });
+            SetupOp::MountTmpfs { perms, size, dest } => {
+                let dest = get_dest!(dest, *perms);
+                if let Err(e) = ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)) {
+                    panic!("TODO: can't mkdir {}: {e}", dest.display())
                 }
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
                     PrivilegedOp::TmpfsMount {
-                        size: std::num::NonZeroUsize::new(op.size),
-                        perms: (op.perms) as _,
-                        path: OsString![dest].into(),
+                        size: *size,
+                        perms: perms.map(|m| m.bits()).unwrap_or(0o755),
+                        path: dest,
                     },
                 );
             }
-            ST::MountMqueue => {
-                if ensure_dir(dest, 0o755) != 0 {
-                    panic!("Can't mkdir {:?}", unsafe { CStr::from_ptr(op.dest) });
+
+            SetupOp::MountMqueue { dest, perms } => {
+                let dest = get_dest!(dest, *perms);
+                if let Err(e) = ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)) {
+                    panic!("TODO: can't mkdir {}: {e}", dest.display())
                 }
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
-                    PrivilegedOp::MqueueMount {
-                        path: OsString![dest].into(),
-                    },
+                    PrivilegedOp::MqueueMount { path: dest },
                 );
             }
-            ST::MakeDir => {
-                assert!(!dest.is_null());
-                assert!(op.perms >= 0);
-                assert!(op.perms <= 0o7777);
-                if ensure_dir(dest, op.perms as libc::mode_t) != 0 {
-                    panic!("Can't mkdir {:?}", unsafe { CStr::from_ptr(op.dest) });
+            SetupOp::MakeDir { perms, dest } => {
+                let dest = get_dest!(dest, *perms);
+                if let Err(e) =
+                    ensure_dir_rust(&dest, perms.unwrap_or(Mode::from_bits_truncate(0o755)))
+                {
+                    panic!("TODO: can't mkdir {}: {e}", dest.display())
                 }
             }
-            ST::Chmod => {
-                assert!(!(op.dest).is_null());
-                assert!(dest.is_null());
-                dest = get_newroot_path(op.dest);
-                assert!(!dest.is_null());
-                assert!(op.perms >= 0);
-                assert!(op.perms <= 0o7777);
-                if libc::chmod(dest, op.perms as libc::mode_t) != 0 {
-                    panic!("Can't chmod {:#o} {:?}", op.perms, unsafe {
-                        CStr::from_ptr(op.dest)
-                    });
+            SetupOp::Chmod { perms, dest } => {
+                let dest = get_newroot_path_rust(&dest);
+                if let Err(e) = nix::sys::stat::fchmodat(
+                    None,
+                    &dest,
+                    perms.unwrap_or(Mode::from_bits_truncate(0o755)),
+                    nix::sys::stat::FchmodatFlags::FollowSymlink,
+                ) {
+                    panic!("TODO: can't chmod {}: {e}", dest.display())
                 }
             }
-            ST::MakeFile => {
-                let mut dest_fd = -1;
-                assert!(!dest.is_null());
-                assert!(op.perms >= 0);
-                assert!(op.perms <= 0o7777);
-                dest_fd = libc::creat(dest, op.perms as libc::mode_t);
-                if dest_fd == -1 {
-                    die_with_error!(c"Can't create file %s".as_ptr(), op.dest,);
+            SetupOp::MakeFile { perms, fd, dest } => {
+                let dest = get_dest!(dest, *perms);
+                let dest_fd = match dest.with_nix_path(|p| {
+                    match libc::creat(p.as_ptr(), perms.map(|p| p.bits()).unwrap_or(0o755)) {
+                        -1 => Err(Errno::last()),
+                        fd => Ok(OwnedFd::from_raw_fd(fd)),
+                    }
+                }) {
+                    Err(e) | Ok(Err(e)) => Err(e),
+                    Ok(Ok(fd)) => Ok(fd),
+                };
+                if let Err(e) = dest_fd {
+                    panic!("Can't create file {}: {e}", dest.display());
                 }
-                if crate::types::copy_file_data(op.fd, dest_fd) != 0 {
-                    die_with_error!(
-                        c"Can't write data to file %s".as_ptr() as *const u8 as *const libc::c_char,
-                        op.dest,
-                    );
+                if let Err(e) = copy_file_data_rust(fd.as_fd(), dest_fd.unwrap().as_fd()) {
+                    panic!("Can't write data to file {}: {e}", dest.display());
                 }
-                libc::close(op.fd);
-                op.fd = -1;
             }
-            ST::MakeBindFile | ST::MakeRoBindFile => {
-                assert!(!dest.is_null());
-                assert!(op.perms >= 0);
-                assert!(op.perms <= 0o7777);
+            SetupOp::MakeBindFile { perms, fd, dest }
+            | SetupOp::MakeRoBindFile { perms, fd, dest } => {
+                let dest = get_dest!(dest, *perms);
                 let (dest_fd, tempfile) =
                     nix::unistd::mkstemp(c"/bindfileXXXXXX").expect("TODO: bubble up error");
+                let dest_fd = OwnedFd::from_raw_fd(dest_fd);
                 if let Err(e) = nix::sys::stat::fchmod(
-                    dest_fd,
-                    nix::sys::stat::Mode::from_bits_retain(op.perms as _),
+                    dest_fd.as_raw_fd(),
+                    perms.unwrap_or(Mode::from_bits_truncate(0o755)),
                 ) {
                     panic!(
-                        "Can't set mode {:#o} on file to be used for {:?}: {e}",
-                        op.perms,
-                        unsafe { CStr::from_ptr(op.dest) },
+                        "Can't set mode {:#o} on file to be used for {}: {e}",
+                        perms.unwrap_or(Mode::from_bits_truncate(0o755)),
+                        dest.display()
                     );
                 }
-                if copy_file_data(op.fd, dest_fd) != 0 {
-                    panic!("Can't write data to file {:?}", unsafe {
-                        CStr::from_ptr(op.dest)
-                    });
+                if let Err(e) = copy_file_data_rust(fd.as_fd(), dest_fd.as_fd()) {
+                    panic!("Can't write data to file {}: {e}", dest.display());
                 }
-                nix::unistd::close(op.fd);
-                op.fd = -1;
-                assert!(!dest.is_null());
-                if ensure_file(dest, 0o444) != 0 {
-                    panic!("Can't create file at {:?}", unsafe {
-                        CStr::from_ptr(op.dest)
-                    });
+                drop(fd);
+
+                if let Err(e) = ensure_file_rust(&dest, Mode::from_bits_truncate(0o444)) {
+                    panic!("Can't create file at {}: {e}", dest.display());
                 }
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
                     privilged_op::PrivilegedOp::BindMount {
                         src: tempfile.clone(),
-                        dest: OsString![dest].into(),
-                        flags: (if op.kind == ST::MakeRoBindFile {
+                        dest: dest.into(),
+                        flags: (if matches!(op, SetupOp::MakeRoBindFile { .. }) {
                             BindOptions::BIND_READONLY
                         } else {
                             BindOptions::empty()
@@ -562,55 +617,36 @@ pub unsafe fn setup_newroot(ops: &mut [SetupOp], unshare_pid: bool, privileged_o
                 );
                 nix::unistd::unlink(tempfile.as_path());
             }
-            ST::MakeSymlink => {
-                assert!(!(op.source).is_null());
-                if libc::symlink(op.source, dest) != 0 {
-                    if errno!() == libc::EEXIST {
-                        let existing = crate::types::readlink_malloc(dest);
-                        if existing.is_null() {
-                            if errno!() == libc::EINVAL {
-                                crate::die!(
-                                            c"Can't make symlink at %s: destination exists and is not a symlink".as_ptr()
-                                                as *const u8 as *const libc::c_char,
-                                            op.dest,
-                                        );
-                            } else {
-                                die_with_error!(
-                                            c"Can't make symlink at %s: destination exists, and cannot read symlink target".as_ptr()
-                                                as *const u8 as *const libc::c_char,
-                                            op.dest,
-                                        );
-                            }
+            SetupOp::MakeSymlink { src, dest, perms } => {
+                let dest = get_dest!(dest, *perms);
+                match nix::unistd::symlinkat(src, None, &dest) {
+                    Err(Errno::EEXIST) => {
+                        let val = nix::fcntl::readlink(&dest).map(PathBuf::from);
+                        if let Err(e) = val {
+                            match e {
+        Errno::EINVAL =>  panic!("Can't make symlink at {}: Destination exist, and is not a symlink", dest.display()),
+                    e => panic!("Can't make symlink at {}: Destination exist, cannot read symlink target: {e}", dest.display()),
                         }
-                        if !(libc::strcmp(existing, op.source) == 0) {
-                            die!(
-                                c"Can't make symlink at %s: existing destination is %s".as_ptr()
-                                    as *const u8
-                                    as *const libc::c_char,
-                                op.dest,
-                                existing,
-                            );
                         }
-                    } else {
-                        die_with_error!(
-                            c"Can't make symlink at %s".as_ptr() as *const u8
-                                as *const libc::c_char,
-                            op.dest,
-                        );
+                        let val = val.unwrap();
+                        if val != *src {
+                            panic!("Can't make symlink at {}: Destination exist, and point to something {}", dest.display(), val.display());
+                        }
                     }
+                    Err(e) => panic!("Failed to create symlink at {} : {e}", dest.display()),
+                    Ok(()) => (),
                 }
             }
-            ST::SetHostname => {
-                assert!(!(op.dest).is_null());
+            SetupOp::SetHostname { hostname } => {
                 privileged_op(
                     privileged_op_socket.as_raw_fd(),
                     privilged_op::PrivilegedOp::SetHostname {
-                        name: OsString![op.dest],
+                        name: hostname.clone(),
                     },
                 );
             }
-            ST::OverlaySrc | _ => {
-                die!(c"Unexpected type %d".as_ptr(), op.kind,);
+            _ => {
+                panic!("Unknown operator")
             }
         }
     }
