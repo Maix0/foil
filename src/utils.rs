@@ -1,5 +1,9 @@
 use std::os::fd::RawFd;
 
+use nix::sched::CloneFlags;
+use nix::unistd::Pid;
+use nix::NixPath;
+
 use crate::types::*;
 use crate::*;
 
@@ -732,15 +736,37 @@ pub unsafe fn get_newroot_path(mut path: *const libc::c_char) -> *mut libc::c_ch
     return strconcat(c"/newroot/".as_ptr(), path);
 }
 
-pub unsafe fn raw_clone(flags: libc::c_ulong, child_stack: *mut libc::c_void) -> libc::c_int {
-    return syscall(__NR_clone as libc::c_long, flags, child_stack) as libc::c_int;
+pub fn raw_clone(flags: nix::sched::CloneFlags) -> Result<nix::unistd::Pid, nix::errno::Errno> {
+    unsafe {
+        syscalls::syscall2(
+            syscalls::Sysno::clone,
+            std::mem::transmute::<_, _>(flags.bits() as isize),
+            std::mem::transmute::<*const libc::c_void, _>(std::ptr::null()),
+        )
+    }
+    .map(|i| Pid::from_raw(i as i32))
+    .map_err(|e| nix::errno::Errno::from_raw(e.into_raw()))
 }
 
-pub unsafe fn pivot_root(
-    new_root: *const libc::c_char,
-    put_old: *const libc::c_char,
-) -> libc::c_int {
-    return syscall(__NR_pivot_root as libc::c_long, new_root, put_old) as libc::c_int;
+pub fn pivot_root<P1: NixPath, P2: NixPath>(
+    new_root: &P1,
+    put_old: &P2,
+) -> Result<(), nix::errno::Errno> {
+    match new_root.with_nix_path(|new_root| {
+        put_old.with_nix_path(|put_old| {
+            unsafe {
+                syscalls::syscall2(
+                    syscalls::Sysno::pivot_root,
+                    std::mem::transmute::<_, _>(new_root.as_ptr()),
+                    std::mem::transmute::<_, _>(put_old.as_ptr()),
+                )
+            }
+            .map_err(|e| nix::errno::Errno::from_raw(e.into_raw()))
+        })
+    }) {
+        Err(e) | Ok(Err(e)) | Ok(Ok(Err(e))) => Err(e),
+        Ok(Ok(Ok(_))) => Ok(()),
+    }
 }
 
 pub fn label_create_file(mut _file_label: *const libc::c_char) -> libc::c_int {

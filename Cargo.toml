@@ -51,6 +51,9 @@ nix = { version = "0.29.0", features = [
 phf = { version = "0.11.2", features = ["macros"] }
 postcard = { version = "1.1.1", features = ["use-std"], default-features = false }
 serde = { version = "1.0.217", features = ["derive"] }
+caps = "0.5.5"
+thiserror = "2.0.11"
+syscalls = { version = "0.6.18", default-features = false, features = ["all"] }
 
 [build-dependencies]
 cc = "1.2"
