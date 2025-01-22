@@ -153,56 +153,6 @@ pub fn xunsetenv(name: *const libc::c_char) {
     }
 }
 
-pub fn strconcat(s1: *const libc::c_char, s2: *const libc::c_char) -> *mut libc::c_char {
-    let mut len = 0 as usize;
-    if !s1.is_null() {
-        len += unsafe { strlen(s1) };
-    }
-    if !s2.is_null() {
-        len += unsafe { strlen(s2) };
-    }
-    let res = xcalloc(1, len + 1) as *mut libc::c_char;
-
-    if !s1.is_null() {
-        unsafe { strcat(res, s1) };
-    }
-    if !s2.is_null() {
-        unsafe { strcat(res, s2) };
-    }
-
-    return res;
-}
-
-pub unsafe fn strconcat3(
-    s1: *const libc::c_char,
-    s2: *const libc::c_char,
-    s3: *const libc::c_char,
-) -> *mut libc::c_char {
-    let mut len = 0 as usize;
-    if !s1.is_null() {
-        len += unsafe { strlen(s1) };
-    }
-    if !s2.is_null() {
-        len += unsafe { strlen(s2) };
-    }
-    if !s3.is_null() {
-        len += unsafe { strlen(s3) };
-    }
-    let res = xcalloc(1, len + 1) as *mut libc::c_char;
-
-    *res = 0;
-    if !s1.is_null() {
-        unsafe { strcat(res, s1) };
-    }
-    if !s2.is_null() {
-        unsafe { strcat(res, s2) };
-    }
-    if !s3.is_null() {
-        unsafe { strcat(res, s3) };
-    }
-    return res;
-}
-
 pub unsafe fn fdwalk(
     _proc_fd: libc::c_int,
     cb: Option<unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int>,
@@ -748,7 +698,7 @@ pub fn raw_clone(flags: nix::sched::CloneFlags) -> Result<nix::unistd::Pid, nix:
     .map_err(|e| nix::errno::Errno::from_raw(e.into_raw()))
 }
 
-pub fn pivot_root<P1: NixPath, P2: NixPath>(
+pub fn pivot_root<P1: NixPath + ?Sized, P2: NixPath + ?Sized>(
     new_root: &P1,
     put_old: &P2,
 ) -> Result<(), nix::errno::Errno> {
@@ -767,14 +717,6 @@ pub fn pivot_root<P1: NixPath, P2: NixPath>(
         Err(e) | Ok(Err(e)) | Ok(Ok(Err(e))) => Err(e),
         Ok(Ok(Ok(_))) => Ok(()),
     }
-}
-
-pub fn label_create_file(mut _file_label: *const libc::c_char) -> libc::c_int {
-    return 0;
-}
-
-pub fn label_exec(mut _exec_label: *const libc::c_char) -> libc::c_int {
-    return 0;
 }
 
 pub fn mount_strerror(errsv: libc::c_int) -> *const libc::c_char {
@@ -798,58 +740,4 @@ unsafe extern "C" fn xmul(a: size_t, b: size_t) -> size_t {
         die_oom();
     }
     return a.wrapping_mul(b);
-}
-
-pub unsafe fn strappend(dest: *mut StringBuilder, src: *const libc::c_char) {
-    let len = strlen(src);
-    let new_offset = xadd((*dest).offset, len);
-    if new_offset >= (*dest).size {
-        (*dest).size = xmul(xadd(new_offset, 1), 2);
-        (*dest).buf = xrealloc((*dest).buf as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
-    }
-    strncpy(
-        ((*dest).buf).offset((*dest).offset as isize),
-        src,
-        len.wrapping_add(1),
-    );
-    (*dest).offset = new_offset;
-}
-
-pub unsafe fn strappend_escape_for_mount_options(
-    dest: *mut StringBuilder,
-    mut src: *const libc::c_char,
-) {
-    let mut unescaped = true;
-    loop {
-        if (*dest).offset == (*dest).size {
-            (*dest).size = if 64 > xmul((*dest).size, 2) {
-                64
-            } else {
-                xmul((*dest).size, 2)
-            };
-            (*dest).buf =
-                xrealloc((*dest).buf as *mut libc::c_void, (*dest).size) as *mut libc::c_char;
-        }
-        match *src as libc::c_int {
-            0 => {
-                *((*dest).buf).offset((*dest).offset as isize) = '\0' as i8;
-                return;
-            }
-            92 | 44 | 58 => {
-                if unescaped {
-                    let fresh1 = (*dest).offset as isize;
-                    (*dest).offset = ((*dest).offset).wrapping_add(1);
-                    *((*dest).buf).offset(fresh1) = '\\' as i8;
-                    unescaped = false;
-                    continue;
-                }
-            }
-            _ => {}
-        }
-        let fresh2 = (*dest).offset as isize;
-        (*dest).offset = ((*dest).offset).wrapping_add(1);
-        *((*dest).buf).offset(fresh2) = *src;
-        unescaped = true;
-        src = src.offset(1);
-    }
 }

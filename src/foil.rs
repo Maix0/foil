@@ -12,8 +12,11 @@ use caps::{Capability, CapsHashSet};
 use libc::{fcntl, AT_FDCWD, MNT_DETACH, MS_MGC_VAL};
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
+use nix::mount::MsFlags;
+use nix::sched::CloneFlags;
+use nix::sys::signal::Signal;
 use nix::sys::stat::Mode;
-use nix::unistd::{Gid, Uid};
+use nix::unistd::{Gid, Pid, Uid};
 use nix::NixPath;
 use privilged_op::{PrivilegedOp, PrivilegedOpError};
 
@@ -43,21 +46,6 @@ bitflags::bitflags! {
     pub struct  SetupOpFlag: u32 {
         const ALLOW_NOTEXIST = 1;
         const NO_CREATE_DEST = 2;
-    }
-}
-
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-    pub struct CloneFlags: i32 {
-        const CLONE_NEWNS = libc::CLONE_NEWNS;
-        const CLONE_NEWIPC= libc::CLONE_NEWIPC;
-        const CLONE_NEWNET = libc::CLONE_NEWNET;
-        const CLONE_NEWPID = libc::CLONE_NEWPID;
-        const CLONE_NEWUTS = libc::CLONE_NEWUTS;
-        const CLONE_NEWUSER = libc::CLONE_NEWUSER;
-        const CLONE_NEWCGROUP = libc::CLONE_NEWCGROUP;
-        const SIGCHLD = libc::SIGCHLD;
-        const _ = !0;
     }
 }
 
@@ -322,44 +310,44 @@ pub static mut real_uid: uid_t = 0;
 */
 
 #[derive(Debug)]
-struct State {
-    operations: Vec<SetupOp>,
-    host_tty_dev: Option<PathBuf>,
-    is_privileged: bool,
-    as_pid1: bool,
-    assert_userns_disable: bool,
-    chdir_path: Option<PathBuf>,
-    die_with_parent: bool,
-    disable_userns: bool,
-    needs_devpts: bool,
-    new_session: bool,
-    sandbox_gid: Option<Gid>,
-    sandbox_hostname: Option<OsString>,
-    sandbox_uid: Option<Uid>,
-    tmp_overlay_coumt: usize,
+pub struct State {
+    pub operations: Vec<SetupOp>,
+    pub host_tty_dev: Option<PathBuf>,
+    pub is_privileged: bool,
+    pub as_pid1: bool,
+    pub assert_userns_disable: bool,
+    pub chdir_path: Option<PathBuf>,
+    pub die_with_parent: bool,
+    pub disable_userns: bool,
+    pub needs_devpts: bool,
+    pub new_session: bool,
+    pub sandbox_gid: Option<Gid>,
+    pub sandbox_hostname: Option<OsString>,
+    pub sandbox_uid: Option<Uid>,
+    pub tmp_overlay_coumt: usize,
 
-    unshare_cgroup: bool,
-    unshare_cgroup_try: bool,
+    pub unshare_cgroup: bool,
+    pub unshare_cgroup_try: bool,
 
-    unshare_ipc: bool,
-    unshare_net: bool,
-    unshare_pid: bool,
+    pub unshare_ipc: bool,
+    pub unshare_net: bool,
+    pub unshare_pid: bool,
 
-    unshare_user: bool,
-    unshare_user_try: bool,
+    pub unshare_user: bool,
+    pub unshare_user_try: bool,
 
-    unshare_uts: bool,
+    pub unshare_uts: bool,
 
-    overflow_gid: Gid,
-    overflow_uid: Uid,
+    pub overflow_gid: Gid,
+    pub overflow_uid: Uid,
 
-    proc_fd: Option<OwnedFd>,
+    pub proc_fd: Option<OwnedFd>,
 
-    real_gid: Gid,
-    real_uid: Uid,
+    pub real_gid: Gid,
+    pub real_uid: Uid,
 
-    change_cap: bool,
-    requested_caps: caps::CapsHashSet,
+    pub change_cap: bool,
+    pub requested_caps: caps::CapsHashSet,
 }
 
 #[derive(Debug)]
@@ -542,58 +530,43 @@ unsafe fn seccomp_programs_apply() {
     }
 }
 
-unsafe fn usage(ecode: libc::c_int, out: *mut FILE) {
-    fprintf(
-        out,
-        c"usage: %s [OPTIONS...] [--] COMMAND [ARGS...]\n\n".as_ptr(),
-        if !argv0.is_null() {
-            argv0
-        } else {
-            c"bwrap".as_ptr()
-        },
-    );
-    fprintf(
-        out,
-        c"    --help                       Print this help\n    --version                    Print version\n    --args FD                    Parse NUL-separated args from FD\n    --argv0 VALUE                Set argv[0] to the value VALUE before running the program\n    --level-prefix               Prepend e.g. <3> to diagnostic messages\n    --unshare-all                Unshare every namespace we support by default\n    --share-net                  Retain the network namespace (can only combine with --unshare-all)\n    --unshare-user               Create new user namespace (may be automatically implied if not setuid)\n    --unshare-user-try           Create new user namespace if possible else continue by skipping it\n    --unshare-ipc                Create new ipc namespace\n    --unshare-pid                Create new pid namespace\n    --unshare-net                Create new network namespace\n    --unshare-uts                Create new uts namespace\n    --unshare-cgroup             Create new cgroup namespace\n    --unshare-cgroup-try         Create new cgroup namespace if possible else continue by skipping it\n    --userns FD                  Use this user namespace (cannot combine with --unshare-user)\n    --userns2 FD                 After setup switch to this user namespace, only useful with --userns\n    --disable-userns             Disable further use of user namespaces inside sandbox\n    --assert-userns-disabled     Fail unless further use of user namespace inside sandbox is disabled\n    --pidns FD                   Use this pid namespace (as parent namespace if using --unshare-pid)\n    --uid UID                    Custom uid in the sandbox (requires --unshare-user or --userns)\n    --gid GID                    Custom gid in the sandbox (requires --unshare-user or --userns)\n    --hostname NAME              Custom hostname in the sandbox (requires --unshare-uts)\n    --chdir DIR                  Change directory to DIR\n    --clearenv                   Unset all environment variables\n    --setenv VAR VALUE           Set an environment variable\n    --unsetenv VAR               Unset an environment variable\n    --lock-file DEST             Take a lock on DEST while sandbox is running\n    --sync-fd FD                 Keep this fd open while sandbox is running\n    --bind SRC DEST              Bind mount the host path SRC on DEST\n    --bind-try SRC DEST          Equal to --bind but ignores non-existent SRC\n    --dev-bind SRC DEST          Bind mount the host path SRC on DEST, allowing device access\n    --dev-bind-try SRC DEST      Equal to --dev-bind but ignores non-existent SRC\n    --ro-bind SRC DEST           Bind mount the host path SRC readonly on DEST\n    --ro-bind-try SRC DEST       Equal to --ro-bind but ignores non-existent SRC\n    --bind-fd FD DEST            Bind open directory or path fd on DEST\n    --ro-bind-fd FD DEST         Bind open directory or path fd read-only on DEST\n    --remount-ro DEST            Remount DEST as readonly; does not recursively remount\n    --overlay-src SRC            Read files from SRC in the following overlay\n    --overlay RWSRC WORKDIR DEST Mount overlayfs on DEST, with RWSRC as the host path for writes and\n                                 WORKDIR an empty directory on the same filesystem as RWSRC\n    --tmp-overlay DEST           Mount overlayfs on DEST, with writes going to an invisible tmpfs\n    --ro-overlay DEST            Mount overlayfs read-only on DEST\n    --exec-label LABEL           Exec label for the sandbox\n    --file-label LABEL           File label for temporary sandbox content\n    --proc DEST                  Mount new procfs on DEST\n    --dev DEST                   Mount new dev on DEST\n    --tmpfs DEST                 Mount new tmpfs on DEST\n    --mqueue DEST                Mount new mqueue on DEST\n    --dir DEST                   Create dir at DEST\n    --file FD DEST               Copy from FD to destination DEST\n    --bind-data FD DEST          Copy from FD to file which is bind-mounted on DEST\n    --ro-bind-data FD DEST       Copy from FD to file which is readonly bind-mounted on DEST\n    --symlink SRC DEST           Create symlink at DEST with target SRC\n    --seccomp FD                 Load and use seccomp rules from FD (not repeatable)\n    --add-seccomp-fd FD          Load and use seccomp rules from FD (repeatable)\n    --block-fd FD                Block on FD until some data to read is available\n    --userns-block-fd FD         Block on FD until the user namespace is ready\n    --info-fd FD                 Write information about the running container to FD\n    --json-status-fd FD          Write container status to FD as multiple JSON documents\n    --new-session                Create a new terminal session\n    --die-with-parent            Kills with SIGKILL child process (COMMAND) when bwrap or bwrap's parent dies.\n    --as-pid-1                   Do not install a reaper process with PID=1\n    --cap-add CAP                Add cap CAP when running as privileged user\n    --cap-drop CAP               Drop cap CAP when running as privileged user\n    --perms OCTAL                Set permissions of next argument (--bind-data, --file, etc.)\n    --size BYTES                 Set size of next argument (only for --tmpfs)\n    --chmod OCTAL PATH           Change permissions of PATH (must already exist)\n".as_ptr()
-            as *const u8 as *const libc::c_char,
-    );
-    exit(ecode);
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("prctl error: {0}")]
+struct HandleDieWithParentError(#[from] Errno);
+
+fn handle_die_with_parent(state: &State) -> Result<(), HandleDieWithParentError> {
+    if state.die_with_parent {
+        nix::sys::prctl::set_pdeathsig(Signal::SIGKILL)?;
+    }
+    Ok(())
 }
 
-unsafe fn handle_die_with_parent() {
-    if opt_die_with_parent as libc::c_int != 0 && prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) != 0 {
-        die_with_error!(c"prctl".as_ptr());
-    }
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("sigprocmask: {0}")]
+struct BlockSigchild(#[from] Errno);
+
+fn block_sigchild() -> Result<(), BlockSigchild> {
+    use nix::sys::signal;
+    use nix::sys::wait;
+    let mut mask = signal::SigSet::empty();
+    mask.add(signal::Signal::SIGCHLD);
+
+    signal::sigprocmask(signal::SigmaskHow::SIG_BLOCK, Some(&mask), None)?;
+
+    while wait::waitpid(None, Some(wait::WaitPidFlag::WNOHANG)).is_ok() {}
+    Ok(())
 }
 
-unsafe fn block_sigchild() {
-    let mut mask = std::mem::zeroed();
-    let mut status: libc::c_int = 0;
-    sigemptyset(&mut mask);
-    sigaddset(&mut mask, libc::SIGCHLD);
-    if sigprocmask(
-        libc::SIG_BLOCK,
-        &mut mask,
-        std::ptr::null_mut() as *mut sigset_t,
-    ) == -1
-    {
-        die_with_error!(c"sigprocmask".as_ptr());
-    }
-    while waitpid(-1, &mut status, WNOHANG) > 0 {}
-}
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("sigprocmask: {0}")]
+struct UnblockSigchild(#[from] Errno);
+fn unblock_sigchild() -> Result<(), UnblockSigchild> {
+    use nix::sys::signal;
+    let mut mask = signal::SigSet::empty();
+    mask.add(signal::Signal::SIGCHLD);
 
-unsafe fn unblock_sigchild() {
-    let mut mask = std::mem::zeroed();
-    sigemptyset(&mut mask);
-    sigaddset(&mut mask, libc::SIGCHLD);
-    if sigprocmask(
-        libc::SIG_UNBLOCK,
-        &mut mask,
-        std::ptr::null_mut() as *mut sigset_t,
-    ) == -1
-    {
-        die_with_error!(c"sigprocmask".as_ptr());
-    }
+    signal::sigprocmask(signal::SigmaskHow::SIG_UNBLOCK, Some(&mask), None)?;
+    Ok(())
 }
 
 unsafe fn close_extra_fds(data: *mut libc::c_void, fd: libc::c_int) -> libc::c_int {
@@ -1273,23 +1246,6 @@ unsafe fn namespace_ids_write(fd: libc::c_int, in_json: bool) {
 }
 
 pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> libc::c_int {
-    let mut old_umask: mode_t = 0;
-    let mut clone_flags: libc::c_int = 0;
-    let mut old_cwd = std::ptr::null_mut() as *mut libc::c_char;
-    let mut pid: pid_t = 0;
-    let mut event_fd = -1;
-    let mut child_wait_fd = -1;
-    let mut setup_finished_pipe: [libc::c_int; 2] = [-1, -1];
-    let mut new_cwd = 0 as *const libc::c_char;
-    let mut ns_uid: uid_t = 0;
-    let mut ns_gid: gid_t = 0;
-    let mut sbuf = std::mem::zeroed();
-    let mut val: u64 = 0;
-    let mut res: libc::c_int = 0;
-    let mut args_data = std::ptr::null_mut() as *mut libc::c_char;
-    let mut intermediate_pids_sockets: [libc::c_int; 2] = [-1, -1];
-    let mut exec_path = std::ptr::null_mut() as *const libc::c_char;
-    let mut i: libc::c_int = 0;
     if argc == 2 && strcmp(*argv.offset(1), c"--version".as_ptr()) == 0 {
         print_version_and_exit();
     }
@@ -1305,7 +1261,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         panic!("--cap-add in setuid mode can be used only by root");
     }
     if state.disable_userns as libc::c_int != 0 && !state.unshare_user {
-        die!(c"--disable-userns requires --unshare-user".as_ptr());
+        panic!("--disable-userns requires --unshare-user");
     }
     if !state.unshare_user_try && nix::sys::stat::stat(c"/proc/self/ns/user").is_ok() {
         let mut disabled = false;
@@ -1326,9 +1282,6 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         if !disabled {
             state.unshare_user = true;
         }
-    }
-    if argc <= 0 {
-        usage(EXIT_FAILURE, stderr);
     }
     if state.sandbox_uid.is_none() {
         state.sandbox_uid = Some(state.real_uid);
@@ -1359,14 +1312,20 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     }
     state.proc_fd = Some(OwnedFd::from_raw_fd(proc_fd.unwrap()));
     let base_path = c"/tmp";
-    if state.unshare_pid && !state.as_pid1 {
-        event_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-        if event_fd == -1 {
-            die_with_error!(c"eventfd()".as_ptr());
+    let event_fd = if state.unshare_pid && !state.as_pid1 {
+        match nix::sys::eventfd::EventFd::from_value_and_flags(
+            0,
+            nix::sys::eventfd::EfdFlags::EFD_CLOEXEC | nix::sys::eventfd::EfdFlags::EFD_NONBLOCK,
+        ) {
+            Ok(fd) => Some(fd),
+            Err(e) => panic!("eventfd(): {e}"),
         }
-    }
+    } else {
+        None
+    };
     block_sigchild();
-    let clone_flags: CloneFlags = CloneFlags::SIGCHLD | CloneFlags::CLONE_NEWNS;
+    let clone_flags: CloneFlags =
+        CloneFlags::from_bits_retain(Signal::SIGCHLD as _) | CloneFlags::CLONE_NEWNS;
     if state.unshare_user {
         clone_flags |= CloneFlags::CLONE_NEWUSER;
     }
@@ -1406,157 +1365,101 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         panic!("eventfd(): {e}");
     }
     let child_wait_fd = child_wait_fd.unwrap();
-    let pid = raw_clone(clone_flags.bits() as libc::c_ulong, std::ptr::null_mut());
-    if pid == -1 {
-        if opt_unshare_user {
-            if errno!() == libc::EINVAL {
-                die!(
-                    c"Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems.".as_ptr()
-                        as *const u8 as *const libc::c_char,
-                );
-            } else if errno!() == EPERM && !is_privileged {
-                die!(
-                    c"No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with 'sysctl kernel.unprivileged_userns_clone=1'.".as_ptr()
-                        as *const u8 as *const libc::c_char,
-                );
+    let pid = match raw_clone(clone_flags) {
+        Err(e) => {
+            if state.unshare_user {
+                if e == Errno::EINVAL {
+                    panic!(
+                     "Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems."
+                )
+                } else if e == Errno::EPERM && !state.is_privileged {
+                    panic!(
+                     "No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with 'sysctl kernel.unprivileged_userns_clone=1'."                )
+                }
             }
+            if e == Errno::ENOSPC {
+                panic!(
+                 "Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)"            )
+            }
+            panic!("Creating new namespace failed: {e}")
         }
-        if errno!() == libc::ENOSPC {
-            die!(
-                c"Creating new namespace failed: nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)".as_ptr()
-                    as *const u8 as *const libc::c_char,
-            );
-        }
-        die_with_error!(c"Creating new namespace failed".as_ptr());
-    }
-    ns_uid = opt_sandbox_uid;
-    ns_gid = opt_sandbox_gid;
-    if pid != 0 {
-        if intermediate_pids_sockets[0] != -1 {
-            close(intermediate_pids_sockets[1]);
-            pid = read_pid_from_socket(intermediate_pids_sockets[0]);
-            close(intermediate_pids_sockets[0]);
-        }
-        namespace_ids_read(pid);
-        if is_privileged as libc::c_int != 0
-            && opt_unshare_user as libc::c_int != 0
-            && opt_userns_block_fd == -1
-        {
+        Ok(pid) => pid,
+    };
+    let mut ns_uid = state.sandbox_uid.unwrap();
+    let mut ns_gid = state.sandbox_gid.unwrap();
+    if pid.as_raw() != 0 {
+        namespace_ids_read(pid.as_raw());
+        if state.is_privileged && state.unshare_user {
             write_uid_gid_map(
-                ns_uid,
-                real_uid,
-                ns_gid,
-                real_gid,
-                pid,
+                ns_uid.as_raw(),
+                state.real_uid.as_raw(),
+                ns_gid.as_raw(),
+                state.real_gid.as_raw(),
+                pid.as_raw(),
                 true,
-                opt_needs_devpts,
+                state.needs_devpts,
             );
-        }
-        if opt_userns2_fd > 0 && setns(opt_userns2_fd, CLONE_NEWUSER) != 0 {
-            die_with_error!(c"Setting userns2 failed".as_ptr());
         }
         drop_privs(false, false);
-        handle_die_with_parent();
-        if opt_info_fd != -1 {
-            let output = xasprintf(c"{\n    \"child-pid\": %i".as_ptr(), pid);
-            dump_info(opt_info_fd, output, true);
-            namespace_ids_write(opt_info_fd, false);
-            dump_info(opt_info_fd, c"\n}\n".as_ptr(), true);
-            close(opt_info_fd);
-        }
-        if opt_json_status_fd != -1 {
-            let output_0 = xasprintf(c"{ \"child-pid\": %i".as_ptr(), pid);
-            dump_info(opt_json_status_fd, output_0, true);
-            namespace_ids_write(opt_json_status_fd, true);
-            dump_info(opt_json_status_fd, c" }\n".as_ptr(), true);
-        }
-        if opt_userns_block_fd != -1 {
-            let mut b: [libc::c_char; 1] = [0; 1];
-            retry!(read(
-                opt_userns_block_fd,
-                b.as_mut_ptr() as *mut libc::c_void,
-                1
-            ));
-            retry!(read(
-                opt_userns_block_fd,
-                b.as_mut_ptr() as *mut libc::c_void,
-                1
-            ));
-            close(opt_userns_block_fd);
-        }
-        val = 1;
-        res = retry!(write(
+        handle_die_with_parent(&state);
+        let val = 1;
+        let res = retry!(write(
             child_wait_fd,
             &mut val as *mut u64 as *const libc::c_void,
             8,
         )) as _;
         close(child_wait_fd);
-        return monitor_child(event_fd, pid, setup_finished_pipe[0]);
+        return monitor_child(event_fd, pid.as_raw(), setup_finished_pipe[0]);
     }
-    if opt_pidns_fd > 0 {
-        if setns(opt_pidns_fd, CLONE_NEWPID) != 0 {
-            die_with_error!(c"Setting pidns failed".as_ptr());
-        }
-        fork_intermediate_child();
-        if opt_unshare_pid {
-            if unshare(CLONE_NEWPID) != 0 {
-                die_with_error!(c"unshare pid ns".as_ptr());
-            }
-            fork_intermediate_child();
-        }
-        close(intermediate_pids_sockets[0]);
-        send_pid_on_socket(intermediate_pids_sockets[1]);
-        close(intermediate_pids_sockets[1]);
-    }
-    if opt_info_fd != -1 {
-        close(opt_info_fd);
-    }
-    if opt_json_status_fd != -1 {
-        close(opt_json_status_fd);
-    }
-    res = read(child_wait_fd, &mut val as *mut u64 as *mut libc::c_void, 8) as libc::c_int;
+    let res = read(child_wait_fd, &mut val as *mut u64 as *mut libc::c_void, 8) as libc::c_int;
     close(child_wait_fd);
     switch_to_user_with_privs();
-    if opt_unshare_net {
+    if state.unshare_net {
         loopback_setup().unwrap();
     }
-    ns_uid = opt_sandbox_uid;
-    ns_gid = opt_sandbox_gid;
-    if !is_privileged && opt_unshare_user as libc::c_int != 0 && opt_userns_block_fd == -1 {
-        if opt_needs_devpts {
-            ns_uid = 0;
-            ns_gid = 0;
+    ns_uid = state.sandbox_uid.unwrap();
+    ns_gid = state.sandbox_gid.unwrap();
+    if !state.is_privileged && state.unshare_user {
+        if state.needs_devpts {
+            ns_uid = 0.into();
+            ns_gid = 0.into();
         }
-        write_uid_gid_map(ns_uid, real_uid, ns_gid, real_gid, -1, true, false);
+        write_uid_gid_map(
+            ns_uid.as_raw(),
+            state.real_uid.as_raw(),
+            ns_gid.as_raw(),
+            state.real_gid.as_raw(),
+            -1,
+            true,
+            false,
+        );
     }
-    old_umask = umask(0);
-    resolve_symlinks_in_ops();
-    if mount(
-        std::ptr::null_mut() as *const libc::c_char,
-        c"/".as_ptr(),
-        std::ptr::null_mut() as *const libc::c_char,
-        (MS_SILENT | MS_SLAVE | MS_REC) as libc::c_ulong,
-        std::ptr::null_mut() as *const libc::c_void,
-    ) < 0
-    {
-        die_with_mount_error!(c"Failed to make / slave".as_ptr());
+    let old_umask = nix::sys::stat::umask(Mode::empty());
+    resolve_symlinks_in_ops(&mut state.operations);
+    if let Err(e) = nix::mount::mount(
+        None,
+        c"/",
+        None,
+        MsFlags::MS_SILENT | MsFlags::MS_SLAVE | MsFlags::MS_REC,
+        None,
+    ) {
+        panic!("Failed to make / slave: {e}");
     }
-    if mount(
-        c"tmpfs".as_ptr(),
+    if let Err(e) = nix::mount::mount(
+        Some(c"tmpfs"),
         base_path,
-        c"tmpfs".as_ptr(),
-        (MS_NODEV | MS_NOSUID) as libc::c_ulong,
-        std::ptr::null_mut() as *const libc::c_void,
-    ) != 0
-    {
-        die_with_mount_error!(c"Failed to mount tmpfs".as_ptr());
+        Some(c"tmpfs"),
+        MsFlags::MS_NODEV | MsFlags::MS_NOSUID,
+        None,
+    ) {
+        panic!("Failed to mount tmpfs: {e}");
     }
-    old_cwd = get_current_dir_name();
-    if chdir(base_path) != 0 {
-        die_with_error!(c"chdir base_path".as_ptr());
+    let old_cwd = std::env::current_dir().expect("TODO: ");
+    if let Err(e) = nix::unistd::chdir(base_path) {
+        panic!("chdir base_path: {e}");
     }
-    if mkdir(c"newroot".as_ptr(), 0o755) != 0 {
-        die_with_error!(c"Creating newroot failed".as_ptr());
+    if let Err(e) = nix::unistd::mkdir(c"newroot", Mode::from_bits_truncate(0o755)) {
+        panic!("Creating newroot failed: {e}");
     }
     if mount(
         c"newroot".as_ptr(),
@@ -1574,28 +1477,23 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if mkdir(c"oldroot".as_ptr(), 0o755) != 0 {
         die_with_error!(c"Creating oldroot failed".as_ptr());
     }
-    i = 0;
-    while i < opt_tmp_overlay_count {
-        let mut dirname = 0 as *mut libc::c_char;
-        dirname = xasprintf(c"tmp-overlay-upper-%d".as_ptr(), i);
-        if mkdir(dirname, 0o755) != 0 {
-            die_with_error!(c"Creating --tmp-overlay upperdir failed".as_ptr(),);
+    for i in 0..state.tmp_overlay_coumt {
+        let dirname = format!("tmp-overlay-upper-{i}");
+        if let Err(e) = nix::unistd::mkdir(dirname.as_str(), Mode::from_bits_truncate(0o755)) {
+            panic!("Creating --tmp-overlay upperdir failed: {e}");
         }
-        free(dirname as *mut libc::c_void);
-        dirname = xasprintf(c"tmp-overlay-work-%d".as_ptr(), i);
-        if mkdir(dirname, 0o755) != 0 {
-            die_with_error!(c"Creating --tmp-overlay workdir failed".as_ptr(),);
+        let dirname = format!("tmp-overlay-work-{i}");
+        if let Err(e) = nix::unistd::mkdir(dirname.as_str(), Mode::from_bits_truncate(0o755)) {
+            panic!("Creating --tmp-overlay workdir failed: {e}");
         }
-        free(dirname as *mut libc::c_void);
-        i += 1;
     }
-    if pivot_root(base_path, c"oldroot".as_ptr()) != 0 {
-        die_with_error!(c"pivot_root".as_ptr());
+    if let Err(e) = pivot_root(base_path, c"oldroot") {
+        panic!("pivot_root: {e}");
     }
-    if chdir(c"/".as_ptr()) != 0 {
-        die_with_error!(c"chdir / (base path)".as_ptr());
+    if let Err(e) = nix::unistd::chdir(c"/") {
+        panic!("chdir / (base path): {e}");
     }
-    if is_privileged {
+    if state.is_privileged {
         let mut child: pid_t = 0;
         let mut privsep_sockets: [libc::c_int; 2] = [0; 2];
         if socketpair(
@@ -1665,7 +1563,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             ));
         }
     } else {
-        setup_newroot(opt_unshare_pid, -1);
+        setup_newroot(std::mem::take(&mut state.operations), state.unshare_pid, -1);
     }
     if mount(
         c"oldroot".as_ptr(),
@@ -1687,8 +1585,8 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if chdir(c"/newroot".as_ptr()) != 0 {
         die_with_error!(c"chdir /newroot".as_ptr());
     }
-    if pivot_root(c".".as_ptr(), c".".as_ptr()) != 0 {
-        die_with_error!(c"pivot_root(/newroot)".as_ptr());
+    if let Err(e) = pivot_root(c".", c".") {
+        panic!("pivot_root(/newroot): {e}");
     }
     if fchdir(oldrootfd) < 0 {
         die_with_error!(c"fchdir to oldroot".as_ptr());
@@ -1699,16 +1597,12 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if chdir(c"/".as_ptr()) != 0 {
         die_with_error!(c"chdir /".as_ptr());
     }
-    if opt_userns2_fd > 0 && setns(opt_userns2_fd, CLONE_NEWUSER) != 0 {
-        die_with_error!(c"Setting userns2 failed".as_ptr());
-    }
-    if opt_unshare_user as libc::c_int != 0
-        && opt_userns_block_fd == -1
-        && (ns_uid != opt_sandbox_uid
-            || ns_gid != opt_sandbox_gid
-            || opt_disable_userns as libc::c_int != 0)
+    if state.unshare_user
+        && (Some(ns_uid) != state.sandbox_uid
+            || Some(ns_gid) != state.sandbox_gid
+            || state.disable_userns)
     {
-        if opt_disable_userns {
+        if state.disable_userns {
             let mut sysctl_fd = -1;
             sysctl_fd = retry!(openat(
                 proc_fd,
@@ -1728,61 +1622,44 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         }
         drop_cap_bounding_set(false);
         write_uid_gid_map(
-            opt_sandbox_uid,
+            state.sandbox_uid,
             ns_uid,
-            opt_sandbox_gid,
+            state.sandbox_gid,
             ns_gid,
             -1,
             false,
             false,
         );
     }
-    if opt_disable_userns as libc::c_int != 0 || opt_assert_userns_disabled as libc::c_int != 0 {
+    if state.disable_userns || state.assert_userns_disable {
         res = unshare(CLONE_NEWUSER);
         if res == 0 {
-            die!(
-                c"creation of new user namespaces was not disabled as requested".as_ptr()
-                    as *const u8 as *const libc::c_char,
-            );
+            panic!("creation of new user namespaces was not disabled as requested");
         }
     }
-    drop_privs(!is_privileged, true);
-    if opt_block_fd != -1 {
-        let mut b_0: [libc::c_char; 1] = [0; 1];
-        retry!(read(opt_block_fd, b_0.as_mut_ptr() as *mut libc::c_void, 1));
-        retry!(read(opt_block_fd, b_0.as_mut_ptr() as *mut libc::c_void, 1));
-        close(opt_block_fd);
-    }
-    if opt_seccomp_fd != -1 {
-        assert!(seccomp_programs.is_null())
-    }
-    umask(old_umask);
-    new_cwd = c"/".as_ptr();
-    if !opt_chdir_path.is_null() {
-        if chdir(opt_chdir_path) != 0 {
-            die_with_error!(c"Can't chdir to %s".as_ptr(), opt_chdir_path,);
+    drop_privs(!state.is_privileged, true);
+    nix::sys::stat::umask(old_umask);
+    let new_cwd = PathBuf::from("/");
+    if let Some(chdir) = state.chdir_path {
+        if let Err(e) = nix::unistd::chdir(&chdir) {
+            panic!("Can't chdir to {}: {e}", chdir.display());
         }
-        new_cwd = opt_chdir_path;
+        new_cwd = chdir;
     } else if chdir(old_cwd) == 0 {
         new_cwd = old_cwd;
     } else {
-        let home: *const libc::c_char = getenv(c"HOME".as_ptr());
-        if !home.is_null() && chdir(home) == 0 {
-            new_cwd = home;
+        let home = std::env::var_os("HOME");
+        if let Some(Ok(())) = home.map(|p| nix::unistd::chdir(p.as_os_str())) {
+            new_cwd = home.unwrap().into();
         }
     }
-    xsetenv(c"PWD".as_ptr(), new_cwd, 1);
+    std::env::set_var("PWD", new_cwd);
     free(old_cwd as *mut libc::c_void);
-    if opt_new_session as libc::c_int != 0 && setsid() == -1 {
+    if state.new_session && setsid() == -1 {
         die_with_error!(c"setsid".as_ptr());
     }
-    if label_exec(opt_exec_label) == -1 {
-        die_with_error!(c"label_exec %s".as_ptr(), *argv.offset(0),);
-    }
-    if !opt_as_pid_1
-        && (opt_unshare_pid as libc::c_int != 0 || !lock_files.is_null() || opt_sync_fd != -1)
-    {
-        pid = fork();
+    if !state.as_pid1 && (state.unshare_pid || !lock_files.is_null()) {
+        let pid = fork();
         if pid == -1 {
             die_with_error!(c"Can't fork for pid 1".as_ptr());
         }
@@ -1792,10 +1669,6 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             let mut j = 0;
             if event_fd != -1 {
                 dont_close[j] = event_fd;
-                j = j + 1;
-            }
-            if opt_sync_fd != -1 {
-                dont_close[j] = opt_sync_fd;
                 j = j + 1;
             }
             dont_close[j] = -1;
@@ -1808,34 +1681,18 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             return do_init(event_fd, pid);
         }
     }
-    if proc_fd != -1 {
-        close(proc_fd);
-    }
-    if !opt_as_pid_1 && opt_sync_fd != -1 {
-        close(opt_sync_fd);
-    }
+    // we close proc_fd
+    let _ = state.proc_fd.take();
+
     unblock_sigchild();
-    handle_die_with_parent();
-    if !is_privileged {
+    handle_die_with_parent(&state);
+    if !state.is_privileged {
         set_ambient_capabilities();
     }
     seccomp_programs_apply();
-    if setup_finished_pipe[1] != -1 {
-        let mut data = 0;
-        res = write_to_fd(setup_finished_pipe[1], &mut data, 1);
-    }
     exec_path = *argv.offset(0);
-    if !opt_argv0.is_null() {
-        let ref mut fresh9 = *argv.offset(0);
-        *fresh9 = opt_argv0 as *mut libc::c_char;
-    }
+    // TODO: change to execvep, and create manual array of envvar
     if execvp(exec_path, argv as *const *const libc::c_char) == -1 {
-        if setup_finished_pipe[1] != -1 {
-            let saved_errno = errno!();
-            let mut data_0 = 0;
-            res = write_to_fd(setup_finished_pipe[1], &mut data_0, 1);
-            errno!() = saved_errno;
-        }
         die_with_error!(c"execvp %s".as_ptr(), exec_path,);
     }
     return 0;

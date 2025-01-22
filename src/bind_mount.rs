@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString, OsString};
 use std::ops::Not;
-use std::os::fd::RawFd;
+use std::os::fd::{BorrowedFd, RawFd};
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
 
@@ -38,6 +38,8 @@ fn realpath_wrapper<P: nix::NixPath + ?Sized>(
                 // SAFETY: this is safe because ptr is not null and points to something that was
                 // malloc'ed by the libc
                 let cstring = CString::from(unsafe { CStr::from_ptr(ptr) });
+                // SAFETY: We can safely free this one since the `cstring` is a new allocation that
+                // has cloned data
                 unsafe { libc::free(ptr.cast()) };
                 Some(cstring)
             }
@@ -56,7 +58,7 @@ pub enum BindMountError {
 }
 
 pub fn bind_mount<'a, 'b, P1: ?Sized + NixPath, P2: ?Sized + NixPath>(
-    proc_fd: RawFd,
+    proc_fd: BorrowedFd<'_>,
     src: Option<&'a P1>,
     dest: &'b P2,
     options: BindOptions,

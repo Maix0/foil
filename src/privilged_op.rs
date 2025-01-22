@@ -1,7 +1,7 @@
 use std::{
     ffi::OsString,
     num::NonZeroUsize,
-    os::fd::{BorrowedFd, RawFd},
+    os::fd::{AsFd as _, BorrowedFd, RawFd},
 };
 
 use nix::mount::MsFlags;
@@ -9,7 +9,6 @@ use nix::mount::MsFlags;
 use crate::{
     bind_mount::{bind_mount, BindMountError, BindOptions},
     nix_retry,
-    types::{opt_unshare_uts, proc_fd},
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -160,16 +159,23 @@ fn send_priviledged_op(privileged_op_fd: RawFd, op: PrivilegedOp) -> Result<(), 
 
 pub const MAX_TMPFS_BYTES: NonZeroUsize = NonZeroUsize::new(usize::MAX >> 1).unwrap();
 
-pub fn privileged_op(privileged_op_fd: RawFd, op: PrivilegedOp) -> Result<(), PrivilegedOpError> {
+pub fn privileged_op(
+    state: &crate::foil::State,
+    privileged_op_fd: RawFd,
+    op: PrivilegedOp,
+) -> Result<(), PrivilegedOpError> {
     if privileged_op_fd != -1 {
         return send_priviledged_op(privileged_op_fd, op);
     }
+    let Some(proc_fd) = state.proc_fd.as_ref().map(|fd| fd.as_fd()) else {
+        panic!("PrivilegedOp without a proc_fd !");
+    };
 
     match op {
         PrivilegedOp::Done => Ok(()),
 
         PrivilegedOp::ReadOnlyRemount { ref path } => bind_mount(
-            unsafe { proc_fd },
+            proc_fd,
             Option::<&str>::None,
             path,
             BindOptions::BIND_READONLY,
@@ -184,7 +190,7 @@ pub fn privileged_op(privileged_op_fd: RawFd, op: PrivilegedOp) -> Result<(), Pr
             ref dest,
             flags,
         } => bind_mount(
-            unsafe { proc_fd },
+            proc_fd,
             Some(src),
             dest,
             BindOptions::BIND_RECURSIVE | flags,
@@ -276,7 +282,7 @@ pub fn privileged_op(privileged_op_fd: RawFd, op: PrivilegedOp) -> Result<(), Pr
             err,
         }),
 
-        PrivilegedOp::SetHostname { .. } if unsafe { !opt_unshare_uts } => {
+        PrivilegedOp::SetHostname { .. } if !state.unshare_uts => {
             Err(PrivilegedOpError::HostnameNotUnshared)
         }
         PrivilegedOp::SetHostname { ref name } => {

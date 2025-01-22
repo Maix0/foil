@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::BufReader;
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd};
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 
@@ -115,10 +115,13 @@ fn collect_mounts(info: &mut Vec<RMountInfo>, lines: &[RMountInfoLine], this: us
     }
 }
 
-pub fn parse_mountinfo(proc_fd: RawFd, root_mount: impl AsRef<OsStr>) -> Box<[RMountInfo]> {
-    pub fn parse_mountinfo_inner(proc_fd: RawFd, root_mount: &OsStr) -> Box<[RMountInfo]> {
+pub fn parse_mountinfo(
+    proc_fd: BorrowedFd<'_>,
+    root_mount: impl AsRef<OsStr>,
+) -> Box<[RMountInfo]> {
+    pub fn parse_mountinfo_inner(proc_fd: BorrowedFd<'_>, root_mount: &OsStr) -> Box<[RMountInfo]> {
         let Ok(mountinfo) = nix::fcntl::openat(
-            Some(proc_fd),
+            Some(proc_fd.as_raw_fd()),
             "self/mountinfo",
             nix::fcntl::OFlag::O_RDONLY,
             nix::sys::stat::Mode::empty(),
@@ -207,11 +210,6 @@ pub fn parse_mountinfo(proc_fd: RawFd, root_mount: impl AsRef<OsStr>) -> Box<[RM
             let mut to_sibling = parent;
             let mut sibling = mounts[parent].first_child;
             let mut change = FillSibling::FistChild;
-            println!(
-                "sibling of {} => {:?}",
-                mounts[this].id,
-                sibling.map(|i| mounts[i].id).unwrap_or(-1)
-            );
             while let Some(sibling_) = sibling {
                 /* If this mountpoint is a path prefix of the sibling,
                  * say this->mp=/foo/bar and sibling->mp=/foo, then it is
@@ -240,12 +238,7 @@ pub fn parse_mountinfo(proc_fd: RawFd, root_mount: impl AsRef<OsStr>) -> Box<[RM
                 FillSibling::NextSibling => mounts[to_sibling].next_sibling = Some(this),
             }
         }
-        println!(
-            "\nroot = {:?} => [{:?}] '{:?}'\n",
-            root, mounts[root].id, mounts[root].mountpoint
-        );
         let mut out = Vec::new();
-        //dbg!(&mounts);
         collect_mounts(&mut out, &mounts, root);
 
         out.into_boxed_slice()
