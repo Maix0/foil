@@ -3,7 +3,6 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use bstr::ByteSlice;
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
-use nix::sched::CloneFlags;
 use nix::sys::stat::Mode;
 use nix::unistd::{Pid, SysconfVar};
 use nix::NixPath;

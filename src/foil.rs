@@ -5,15 +5,14 @@ use std::io::IsTerminal;
 use std::num::NonZeroUsize;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::ptr;
 
 use ::libc;
 use caps::errors::CapsError;
 use caps::{Capability, CapsHashSet};
-use libc::{fcntl, AT_FDCWD, MNT_DETACH, MS_MGC_VAL};
 use nix::errno::Errno;
-use nix::fcntl::{AtFlags, OFlag};
+use nix::fcntl::OFlag;
 use nix::mount::{MntFlags, MsFlags};
 use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::sched::CloneFlags;
@@ -33,9 +32,8 @@ use crate::*;
 use crate::{
     types::*,
     utils::{
-        create_pid_socketpair, fdwalk, fork_intermediate_child, load_file_data, pivot_root,
-        raw_clone, read_pid_from_socket, send_pid_on_socket, write_file_at, write_to_fd, xcalloc,
-        xsetenv,
+        fdwalk, load_file_data, pivot_root,
+        raw_clone, write_to_fd, xcalloc,
     },
 };
 
@@ -1078,7 +1076,7 @@ fn print_version_and_exit() -> ! {
     std::process::exit(0);
 }
 
-pub fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> libc::c_int {
+pub fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int {
     let mut state = State::new().expect("TODO:");
     state.env = std::env::vars_os().collect();
 

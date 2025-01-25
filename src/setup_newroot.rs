@@ -1,28 +1,24 @@
-use std::ffi::{CStr, OsStr, OsString};
-use std::num::NonZeroUsize;
+use std::ffi::OsString;
 use std::os::fd::{AsFd as _, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::unreachable;
 
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::task::RawWaker;
 
 use crate::retry;
 use crate::{
-    die, die_with_error, errno,
+    errno,
     privilged_op::{self, privileged_op, PrivilegedOp},
     types::{
-        copy_file_data, create_file, ensure_dir, ensure_file, mkdir_with_parents, BindOptions,
+        BindOptions,
         SetupOp,
     },
-    OsString,
 };
 
 use bitflags::Flags;
 use bstr::{BStr, ByteSlice};
 use nix::errno::Errno;
-use nix::sys::socket::SetSockOpt;
 use nix::sys::stat::Mode;
 use nix::unistd::AccessFlags;
 use nix::NixPath as _;

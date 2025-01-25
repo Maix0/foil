@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString, OsString};
 use std::ops::Not;
-use std::os::fd::{BorrowedFd, RawFd};
+use std::os::fd::BorrowedFd;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
 
