@@ -1,7 +1,11 @@
-use std::os::fd::RawFd;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
+use bstr::ByteSlice;
+use nix::errno::Errno;
+use nix::fcntl::OFlag;
 use nix::sched::CloneFlags;
-use nix::unistd::Pid;
+use nix::sys::stat::Mode;
+use nix::unistd::{Pid, SysconfVar};
 use nix::NixPath;
 
 use crate::types::*;
@@ -153,67 +157,46 @@ pub fn xunsetenv(name: *const libc::c_char) {
     }
 }
 
-pub unsafe fn fdwalk(
-    _proc_fd: libc::c_int,
-    cb: Option<unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int>,
-    data: *mut libc::c_void,
-) -> libc::c_int {
-    let mut open_max: libc::c_int = 0;
-    let mut fd: libc::c_int = 0;
-    let mut dfd: libc::c_int = 0;
-    let mut res = 0;
-    let mut d = 0 as *mut DIR;
-    dfd = retry!(openat(
-        _proc_fd,
-        c"self/fd".as_ptr(),
-        0o200000 | 0o4000 | 0o2000000 | 0o400,
+pub fn fdwalk<'a, F: Fn(RawFd) + 'a>(proc_fd: BorrowedFd<'_>, cb: F) -> Result<(), Errno> {
+    let dfd = nix_retry!(nix::dir::Dir::openat(
+        Some(proc_fd.as_raw_fd()),
+        c"self/fd",
+        OFlag::O_DIRECTORY
+            | OFlag::O_RDONLY
+            | OFlag::O_NONBLOCK
+            | OFlag::O_CLOEXEC
+            | OFlag::O_NOCTTY,
+        Mode::empty(),
     ));
-    if dfd == -1 {
-        return res;
-    }
-    d = fdopendir(dfd);
-    if !d.is_null() {
-        let mut de = 0 as *mut libc::dirent;
-        loop {
-            de = readdir(d);
-            if de.is_null() {
-                break;
-            }
-            let mut l: libc::c_long = 0;
-            let mut e = std::ptr::null_mut();
-            if (*de).d_name[0] as libc::c_int == '.' as i32 {
+    if let Ok(dir) = dfd {
+        let dir_fd = dir.as_raw_fd();
+        for entry in dir {
+            let entry = entry?;
+            let Ok(name) = entry.file_name().to_str() else {
+                continue;
+            };
+            if name.starts_with('.') {
                 continue;
             }
-            errno!() = 0;
-            l = strtol(((*de).d_name).as_mut_ptr(), &mut e, 10);
-            if errno!() != 0 || e.is_null() || *e as libc::c_int != 0 {
+            let Ok(l) = u64::from_str_radix(name, 10) else {
+                continue;
+            };
+            let Ok(fd): Result<RawFd, _> = l.try_into() else {
+                continue;
+            };
+            if fd == dir_fd {
                 continue;
             }
-            fd = l as libc::c_int;
-            if fd as libc::c_long != l {
-                continue;
-            }
-            if fd == dirfd(d) {
-                continue;
-            }
-            res = cb.expect("non-null function pointer")(data, fd);
-            if res != 0 {
-                break;
-            }
+            cb(fd);
         }
-        closedir(d);
-        return res;
     }
-    open_max = sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
-    fd = 0;
-    while fd < open_max {
-        res = cb.expect("non-null function pointer")(data, fd);
-        if res != 0 {
-            break;
-        }
-        fd += 1;
+    let Ok(Some(open_max)) = nix::unistd::sysconf(SysconfVar::OPEN_MAX) else {
+        return Ok(());
+    };
+    for fd in 0..open_max {
+        cb(fd as RawFd);
     }
-    return res;
+    Ok(())
 }
 
 pub fn write_to_fd(
@@ -242,6 +225,38 @@ pub fn write_to_fd(
         content = unsafe { content.add(res as usize) };
     }
     return 0;
+}
+
+pub fn write_to_fd_rust<'fd>(
+    fd: BorrowedFd<'fd>,
+    mut content: &[u8],
+) -> Result<(), nix::errno::Errno> {
+    while !content.is_empty() {
+        let res = nix_retry!(nix::unistd::write(fd, content))?;
+        if res == 0 {
+            return Err(nix::errno::Errno::ENOSPC);
+        }
+        content = &content[res..];
+    }
+    Ok(())
+}
+
+pub fn write_file_at_rust<P: NixPath + ?Sized>(
+    dfd: Option<BorrowedFd<'_>>,
+    path: &P,
+    content: &[u8],
+) -> Result<(), Errno> {
+    let fd = nix_retry!(nix::fcntl::openat(
+        dfd.map(|fd| fd.as_raw_fd()),
+        path,
+        OFlag::O_RDWR | OFlag::O_PATH,
+        Mode::empty()
+    ))
+    .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })?;
+    if !content.is_empty() {
+        write_to_fd_rust(fd.as_fd(), content)?;
+    }
+    Ok(())
 }
 
 pub fn write_file_at(
@@ -670,20 +685,6 @@ pub unsafe fn readlink_malloc(pathname: *const libc::c_char) -> *mut libc::c_cha
     } else {
         steal_pointer(&mut value as *mut *mut libc::c_char as *mut libc::c_void)
     }) as *mut libc::c_char;
-}
-
-pub unsafe fn get_oldroot_path(mut path: *const libc::c_char) -> *mut libc::c_char {
-    while *path as libc::c_int == '/' as i32 {
-        path = path.offset(1);
-    }
-    return strconcat(c"/oldroot/".as_ptr(), path);
-}
-
-pub unsafe fn get_newroot_path(mut path: *const libc::c_char) -> *mut libc::c_char {
-    while *path as libc::c_int == '/' as i32 {
-        path = path.offset(1);
-    }
-    return strconcat(c"/newroot/".as_ptr(), path);
 }
 
 pub fn raw_clone(flags: nix::sched::CloneFlags) -> Result<nix::unistd::Pid, nix::errno::Errno> {

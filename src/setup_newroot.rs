@@ -9,13 +9,12 @@ use std::path::{Path, PathBuf};
 use std::task::RawWaker;
 
 use crate::retry;
-use crate::types::{SetupOpFlag, SetupOpType};
 use crate::{
     die, die_with_error, errno,
     privilged_op::{self, privileged_op, PrivilegedOp},
     types::{
-        copy_file_data, create_file, ensure_dir, ensure_file, get_newroot_path, mkdir_with_parents,
-        strconcat, strconcat3, BindOptions, SetupOp,
+        copy_file_data, create_file, ensure_dir, ensure_file, mkdir_with_parents, BindOptions,
+        SetupOp,
     },
     OsString,
 };
@@ -27,7 +26,6 @@ use nix::sys::socket::SetSockOpt;
 use nix::sys::stat::Mode;
 use nix::unistd::AccessFlags;
 use nix::NixPath as _;
-use SetupOpType as ST;
 
 macro_rules! push_path {
     ($base:expr, $($e:expr),* $(,)?) => {
@@ -283,8 +281,9 @@ macro_rules! get_dest {
     }};
 }
 
-pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_socket: RawFd) {
+pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Option<RawFd>) {
     let mut tmp_overlay_idx = 0;
+    let ops = std::mem::take(&mut state.operations);
     let mut op_iterator = ops.iter().peekable();
 
     while let Some(op) = op_iterator.next() {
@@ -317,7 +316,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                     panic!("TODO: Can't create file {}: {e} ", dest.display());
                 }
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     PrivilegedOp::BindMount {
                         src,
                         dest,
@@ -377,7 +377,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                 }
                 write!(&mut options, ",userxattr");
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     PrivilegedOp::OverlayMount {
                         path: dest,
                         options,
@@ -387,7 +388,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
             SetupOp::RemountRoNoRecursive { dest, perms } => {
                 let dest = get_dest!(dest, *perms);
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     PrivilegedOp::ReadOnlyRemount { path: dest },
                 );
             }
@@ -396,14 +398,16 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                 if ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)).is_err() {
                     panic!("Can't mkdir {}", dest.display());
                 }
-                if unshare_pid || crate::types::opt_pidns_fd != -1 {
+                if state.unshare_pid {
                     privileged_op(
-                        privileged_op_socket.as_raw_fd(),
+                        state,
+                        privileged_op_socket,
                         PrivilegedOp::ProcMount { path: dest.clone() },
                     );
                 } else {
                     privileged_op(
-                        privileged_op_socket.as_raw_fd(),
+                        state,
+                        privileged_op_socket,
                         PrivilegedOp::BindMount {
                             src: "oldroot/proc".into(),
                             dest: dest.clone(),
@@ -420,7 +424,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                         }
                     } else {
                         privileged_op(
-                            privileged_op_socket.as_raw_fd(),
+                            state,
+                            privileged_op_socket,
                             PrivilegedOp::BindMount {
                                 src: subdir.clone(),
                                 dest: subdir.clone(),
@@ -436,7 +441,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                     panic!("Can't mkdir {}", dest.display());
                 }
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     PrivilegedOp::TmpfsMount {
                         size: None,
                         perms: 0o755,
@@ -455,7 +461,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                         panic!("Can't create file {}/{}: {e}", dest.display(), elem);
                     }
                     privileged_op(
-                        privileged_op_socket.as_raw_fd(),
+                        state,
+                        privileged_op_socket,
                         PrivilegedOp::BindMount {
                             src: node_src,
                             dest: node_dest,
@@ -489,16 +496,15 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                     panic!("TODO: Can't create {}/devpts: {e}", dest.display());
                 }
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     PrivilegedOp::DevMount { path: pts },
                 );
                 if let Err(e) = nix::unistd::symlinkat(c"pts/ptmx", None, &ptmx) {
                     panic!("TODO: Can't make symlink at {}/ptmx: {e}", dest.display());
                 }
-                if !crate::types::host_tty_dev.is_null()
-                    && *crate::types::host_tty_dev as libc::c_int != 0
-                {
-                    let src_tty_dev = strconcat(c"/oldroot".as_ptr(), crate::types::host_tty_dev);
+                if let Some(tty_dev) = &state.host_tty_dev {
+                    let src_tty_dev = push_path!(PathBuf::from("/oldroot"), tty_dev);
                     let dest_console = push_path!(dest.clone(), "console");
                     if let Err(e) = create_file_rust(
                         &dest_console,
@@ -508,9 +514,10 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                         panic!("creating {}/console: {e}", dest.display());
                     }
                     privileged_op(
-                        privileged_op_socket.as_raw_fd(),
+                        state,
+                        privileged_op_socket,
                         PrivilegedOp::BindMount {
-                            src: OsString![src_tty_dev].into(),
+                            src: src_tty_dev,
                             dest: dest_console,
                             flags: BindOptions::BIND_DEVICES,
                         },
@@ -523,7 +530,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                     panic!("TODO: can't mkdir {}: {e}", dest.display())
                 }
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     PrivilegedOp::TmpfsMount {
                         size: *size,
                         perms: perms.map(|m| m.bits()).unwrap_or(0o755),
@@ -538,7 +546,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                     panic!("TODO: can't mkdir {}: {e}", dest.display())
                 }
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     PrivilegedOp::MqueueMount { path: dest },
                 );
             }
@@ -564,9 +573,11 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
             SetupOp::MakeFile { perms, fd, dest } => {
                 let dest = get_dest!(dest, *perms);
                 let dest_fd = match dest.with_nix_path(|p| {
-                    match libc::creat(p.as_ptr(), perms.map(|p| p.bits()).unwrap_or(0o755)) {
+                    match unsafe {
+                        libc::creat(p.as_ptr(), perms.map(|p| p.bits()).unwrap_or(0o755))
+                    } {
                         -1 => Err(Errno::last()),
-                        fd => Ok(OwnedFd::from_raw_fd(fd)),
+                        fd => Ok(unsafe { OwnedFd::from_raw_fd(fd) }),
                     }
                 }) {
                     Err(e) | Ok(Err(e)) => Err(e),
@@ -584,7 +595,7 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                 let dest = get_dest!(dest, *perms);
                 let (dest_fd, tempfile) =
                     nix::unistd::mkstemp(c"/bindfileXXXXXX").expect("TODO: bubble up error");
-                let dest_fd = OwnedFd::from_raw_fd(dest_fd);
+                let dest_fd = unsafe { OwnedFd::from_raw_fd(dest_fd) };
                 if let Err(e) = nix::sys::stat::fchmod(
                     dest_fd.as_raw_fd(),
                     perms.unwrap_or(Mode::from_bits_truncate(0o755)),
@@ -604,7 +615,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
                     panic!("Can't create file at {}: {e}", dest.display());
                 }
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     privilged_op::PrivilegedOp::BindMount {
                         src: tempfile.clone(),
                         dest: dest.into(),
@@ -639,7 +651,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
             }
             SetupOp::SetHostname { hostname } => {
                 privileged_op(
-                    privileged_op_socket.as_raw_fd(),
+                    state,
+                    privileged_op_socket,
                     privilged_op::PrivilegedOp::SetHostname {
                         name: hostname.clone(),
                     },
@@ -651,7 +664,8 @@ pub unsafe fn setup_newroot(ops: Vec<SetupOp>, unshare_pid: bool, privileged_op_
         }
     }
     privileged_op(
-        privileged_op_socket.as_raw_fd(),
+        state,
+        privileged_op_socket,
         privilged_op::PrivilegedOp::Done,
     );
 }

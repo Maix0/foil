@@ -1,4 +1,6 @@
-use std::ffi::{CStr, OsStr, OsString};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::io::IsTerminal;
 use std::num::NonZeroUsize;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -11,12 +13,17 @@ use caps::errors::CapsError;
 use caps::{Capability, CapsHashSet};
 use libc::{fcntl, AT_FDCWD, MNT_DETACH, MS_MGC_VAL};
 use nix::errno::Errno;
-use nix::fcntl::OFlag;
-use nix::mount::MsFlags;
+use nix::fcntl::{AtFlags, OFlag};
+use nix::mount::{MntFlags, MsFlags};
+use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::sched::CloneFlags;
-use nix::sys::signal::Signal;
+use nix::sys::eventfd::EventFd;
+use nix::sys::signal::{SigSet, Signal};
+use nix::sys::signalfd::SfdFlags;
+use nix::sys::socket::SockFlag;
 use nix::sys::stat::Mode;
-use nix::unistd::{Gid, Pid, Uid};
+use nix::sys::wait::WaitPidFlag;
+use nix::unistd::{ForkResult, Gid, Pid, Uid};
 use nix::NixPath;
 use privilged_op::{PrivilegedOp, PrivilegedOpError};
 
@@ -26,9 +33,9 @@ use crate::*;
 use crate::{
     types::*,
     utils::{
-        create_pid_socketpair, fdwalk, fork_intermediate_child, label_exec, load_file_data,
-        pivot_root, raw_clone, read_pid_from_socket, send_pid_on_socket, write_file_at,
-        write_to_fd, xcalloc, xsetenv,
+        create_pid_socketpair, fdwalk, fork_intermediate_child, load_file_data, pivot_root,
+        raw_clone, read_pid_from_socket, send_pid_on_socket, write_file_at, write_to_fd, xcalloc,
+        xsetenv,
     },
 };
 
@@ -36,9 +43,9 @@ use crate::privilged_op::privileged_op;
 
 #[derive(Copy, Clone)]
 pub struct NsInfo {
-    pub name: &'static str,
-    pub do_unshare: *mut bool,
-    pub id: ino_t,
+    pub name: &'static CStr,
+    pub do_unshare: fn(&mut State) -> Option<&mut bool>,
+    pub id: fn(&mut State) -> &mut Option<ino_t>,
 }
 
 bitflags::bitflags! {
@@ -348,7 +355,51 @@ pub struct State {
 
     pub change_cap: bool,
     pub requested_caps: caps::CapsHashSet,
+
+    pub env: HashMap<OsString, OsString>,
+
+    pub id_cgroup: Option<ino_t>,
+    pub id_ipc: Option<ino_t>,
+    pub id_net: Option<ino_t>,
+    pub id_pid: Option<ino_t>,
+    pub id_uts: Option<ino_t>,
 }
+
+const NS_INFO: [NsInfo; 6] = [
+    NsInfo {
+        name: c"cgroup",
+        do_unshare: |state: &mut State| Some(&mut state.unshare_cgroup),
+        id: |state: &mut State| (&mut state.id_cgroup),
+    },
+    NsInfo {
+        name: c"ipc",
+        do_unshare: |state: &mut State| Some(&mut state.unshare_ipc),
+        id: |state: &mut State| (&mut state.id_ipc),
+    },
+    NsInfo {
+        name: c"mnt",
+        do_unshare: |_: &mut State| None,
+        id: |_: &mut State| unreachable!("No id for mnt"),
+    },
+    NsInfo {
+        name: c"net",
+        do_unshare: |state: &mut State| Some(&mut state.unshare_net),
+        id: |state: &mut State| (&mut state.id_net),
+    },
+    NsInfo {
+        name: c"pid",
+        do_unshare: |state: &mut State| Some(&mut state.unshare_pid),
+        id: |state: &mut State| (&mut state.id_pid),
+    },
+    /* user namespace info omitted because it
+     * is not (yet) valid when we obtain the
+     * namespace info (get un-shared later) */
+    NsInfo {
+        name: c"uts",
+        do_unshare: |state: &mut State| Some(&mut state.unshare_uts),
+        id: |state: &mut State| (&mut state.id_uts),
+    },
+];
 
 #[derive(Debug)]
 pub enum StateCreationError {
@@ -409,67 +460,19 @@ impl State {
             real_uid: Uid::current(),
             change_cap: false,
             requested_caps: Default::default(),
+            env: Default::default(),
+            id_cgroup: None,
+            id_ipc: None,
+            id_net: None,
+            id_pid: None,
+            id_uts: None,
         })
     }
 }
 
-static mut ns_infos: [NsInfo; 6] = unsafe {
-    [
-        NsInfo {
-            name: "cgroup",
-            do_unshare: &opt_unshare_cgroup as *const bool as *mut bool,
-            id: 0,
-        },
-        NsInfo {
-            name: "ipc",
-            do_unshare: &opt_unshare_ipc as *const bool as *mut bool,
-            id: 0,
-        },
-        NsInfo {
-            name: "mnt",
-            do_unshare: std::ptr::null_mut() as *mut bool,
-            id: 0,
-        },
-        NsInfo {
-            name: "net",
-            do_unshare: &opt_unshare_net as *const bool as *mut bool,
-            id: 0,
-        },
-        NsInfo {
-            name: "pid",
-            do_unshare: &opt_unshare_pid as *const bool as *mut bool,
-            id: 0,
-        },
-        NsInfo {
-            name: "uts",
-            do_unshare: &opt_unshare_uts as *const bool as *mut bool,
-            id: 0,
-        },
-    ]
-};
-
 static mut lock_files: *mut LockFile = std::ptr::null_mut() as *mut LockFile;
 
 static mut last_lock_file: *mut LockFile = std::ptr::null_mut() as *mut LockFile;
-#[inline]
-
-unsafe fn _lock_file_append_new() -> *mut LockFile {
-    let self_0 = xcalloc(1, ::core::mem::size_of::<LockFile>()) as *mut LockFile;
-    if !last_lock_file.is_null() {
-        (*last_lock_file).next = self_0;
-    } else {
-        lock_files = self_0;
-    }
-    last_lock_file = self_0;
-    return self_0;
-}
-
-unsafe fn lock_file_new(path: *const libc::c_char) -> *mut LockFile {
-    let lock = _lock_file_append_new();
-    (*lock).path = path;
-    return lock;
-}
-#[inline]
 
 unsafe fn _seccomp_program_append_new() -> *mut SeccompProgram {
     let self_0 = xcalloc(1, ::core::mem::size_of::<SeccompProgram>()) as *mut SeccompProgram;
@@ -506,28 +509,6 @@ unsafe fn seccomp_program_new(fd: *mut libc::c_int) -> *mut SeccompProgram {
         steal_pointer(&mut data as *mut *mut libc::c_char as *mut libc::c_void)
     }) as *mut sock_filter;
     return self_0;
-}
-
-unsafe fn seccomp_programs_apply() {
-    let mut program = 0 as *mut SeccompProgram;
-    program = seccomp_programs;
-    while !program.is_null() {
-        if prctl(
-            PR_SET_SECCOMP,
-            SECCOMP_MODE_FILTER,
-            &mut (*program).program as *mut sock_fprog,
-        ) != 0
-        {
-            if errno!() == libc::EINVAL {
-                die!(
-                    c"Unable to set up system call filtering as requested: prctl(PR_SET_SECCOMP) reported EINVAL. (Hint: this requires a kernel configured with CONFIG_SECCOMP and CONFIG_SECCOMP_FILTER.)".as_ptr()
-                        as *const u8 as *const libc::c_char,
-                );
-            }
-            die_with_error!(c"prctl(PR_SET_SECCOMP)".as_ptr());
-        }
-        program = (*program).next;
-    }
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -586,12 +567,35 @@ unsafe fn close_extra_fds(data: *mut libc::c_void, fd: libc::c_int) -> libc::c_i
     return 0;
 }
 
-unsafe fn propagate_exit_status(status: libc::c_int) -> libc::c_int {
-    if status & 0x7f as libc::c_int == 0 {
-        return (status & 0xff00) >> 8;
+fn close_extra_fds_closure(data: &[RawFd]) -> impl Fn(RawFd) + use<'_> {
+    |fd: RawFd| {
+        if fd > 2 || !data.contains(&fd) {
+            let _ = nix::unistd::close(fd);
+        }
     }
-    if ((status & 0x7f as libc::c_int) + 1) as libc::c_schar as libc::c_int >> 1 > 0 {
-        return 128 + (status & 0x7f as libc::c_int);
+}
+/*
+  if (WIFEXITED(status))
+    return WEXITSTATUS(status);
+
+  / * The process died of a signal, we can't really report that, but we
+   * can at least be bash-compatible. The bash manpage says:
+   *   The return value of a simple command is its
+   *   exit status, or 128+n if the command is
+   *   terminated by signal n.
+   * /
+  if (WIFSIGNALED(status))
+    return 128 + WTERMSIG(status);
+
+  / * Weird? * /
+  return 255;
+*/
+fn propagate_exit_status(status: libc::c_int) -> libc::c_int {
+    if libc::WIFEXITED(status) {
+        return libc::WEXITSTATUS(status);
+    }
+    if libc::WIFSIGNALED(status) {
+        return 128 + libc::WTERMSIG(status);
     }
     return 255;
 }
@@ -603,185 +607,122 @@ unsafe fn dump_info(fd: libc::c_int, output: *const libc::c_char, exit_on_error:
     }
 }
 
-unsafe fn report_child_exit_status(exitc: libc::c_int, setup_finished_fd: libc::c_int) {
-    let mut s: ssize_t = 0;
-    let mut data: [libc::c_char; 2] = [0; 2];
-    let mut output = std::ptr::null_mut() as *mut libc::c_char;
-    if opt_json_status_fd == -1 || setup_finished_fd == -1 {
-        return;
-    }
-    s = loop {
-        let __result = read(
-            setup_finished_fd,
-            data.as_mut_ptr() as *mut libc::c_void,
-            ::core::mem::size_of::<[libc::c_char; 2]>(),
-        );
-        if !(__result == -1 && errno!() == libc::EINTR) {
-            break __result;
-        }
-    };
-    if s == -1 && errno!() != libc::EAGAIN {
-        die_with_error!(c"read eventfd".as_ptr());
-    }
-    if s != 1 {
-        return;
-    }
-    output = xasprintf(c"{ \"exit-code\": %i }\n".as_ptr(), exitc);
-    dump_info(opt_json_status_fd, output, false);
-    close(opt_json_status_fd);
-    opt_json_status_fd = -1;
-    close(setup_finished_fd);
-}
-
-unsafe fn monitor_child(
-    event_fd: libc::c_int,
-    child_pid: pid_t,
-    setup_finished_fd: libc::c_int,
+fn monitor_child(
+    state: &State,
+    event_fd: Option<EventFd>,
+    child_pid: Pid,
+    setup_finished_fd: Option<OwnedFd>,
 ) -> libc::c_int {
-    let mut res: libc::c_int = 0;
-    let mut val: u64 = 0;
-    let mut s: ssize_t = 0;
-    let mut signal_fd: libc::c_int = 0;
-    let mut mask = std::mem::zeroed();
-    let mut fds: [pollfd; 2] = [pollfd {
-        fd: 0,
-        events: 0,
-        revents: 0,
-    }; 2];
-    let mut num_fds: libc::c_int = 0;
-    let mut fdsi = std::mem::zeroed();
-    let mut dont_close: [libc::c_int; 4] = [-1, -1, -1, -1];
-    let mut j: libc::c_int = 0;
-    let mut exitc: libc::c_int = 0;
-    let mut died_pid: pid_t = 0;
-    let mut died_status: libc::c_int = 0;
-    if event_fd != -1 {
-        let fresh0 = j;
-        j = j.wrapping_add(1);
-        dont_close[fresh0 as usize] = event_fd;
+    let mut dont_close: [RawFd; 4] = [0; 4];
+    let mut j = 1;
+    if let Some(fd) = &event_fd {
+        dont_close[j] = fd.as_raw_fd();
+        j += 1;
     }
-    if opt_json_status_fd != -1 {
-        let fresh1 = j;
-        j = j.wrapping_add(1);
-        dont_close[fresh1 as usize] = opt_json_status_fd;
+    if let Some(fd) = &setup_finished_fd {
+        dont_close[j] = fd.as_raw_fd();
+        j += 1;
     }
-    if setup_finished_fd != -1 {
-        let fresh2 = j;
-        j = j.wrapping_add(1);
-        dont_close[fresh2 as usize] = setup_finished_fd;
-    }
-    assert!(
-        (j as libc::c_ulong)
-            < (::core::mem::size_of::<[libc::c_int; 4]>() as libc::c_ulong)
-                .wrapping_div(::core::mem::size_of::<libc::c_int>() as libc::c_ulong)
-    );
+    assert!(j < dont_close.len());
     fdwalk(
-        proc_fd,
-        Some(close_extra_fds as unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int),
-        dont_close.as_mut_ptr() as *mut libc::c_void,
+        state.proc_fd.as_ref().map(|f| f.as_fd()).unwrap(),
+        close_extra_fds_closure(&dont_close[..j]),
     );
-    sigemptyset(&mut mask);
-    sigaddset(&mut mask, libc::SIGCHLD);
-    signal_fd = signalfd(-1, &mut mask, libc::SFD_CLOEXEC | libc::SFD_NONBLOCK);
-    if signal_fd == -1 {
-        die_with_error!(c"Can't create signalfd".as_ptr());
+    let mut mask = SigSet::empty();
+    mask.add(Signal::SIGCHLD);
+    let signal_fd = match nix::sys::signalfd::SignalFd::with_flags(
+        &mask,
+        SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK,
+    ) {
+        Err(e) => panic!("Can't create signalfd: {e}"),
+        Ok(fd) => fd,
+    };
+    let mut fds = std::mem::MaybeUninit::<[PollFd; 2]>::zeroed();
+    let mut fds_len = 1usize;
+    {
+        let pfd = fds.as_mut_ptr().cast::<PollFd>();
+        unsafe { pfd.write(PollFd::new(signal_fd.as_fd(), PollFlags::POLLIN)) };
     }
-    num_fds = 1;
-    fds[0].fd = signal_fd;
-    fds[0].events = POLLIN as libc::c_short;
-    if event_fd != -1 {
-        fds[1].fd = event_fd;
-        fds[1].events = POLLIN as libc::c_short;
-        num_fds += 1;
+    if let Some(fd) = &event_fd {
+        {
+            let pfd = fds.as_mut_ptr().cast::<PollFd>().wrapping_offset(1);
+            unsafe { pfd.write(PollFd::new(fd.as_fd(), PollFlags::POLLIN)) };
+        }
+        fds_len += 1;
     }
     loop {
-        fds[1].revents = 0;
-        fds[0].revents = fds[1].revents;
-        res = poll(fds.as_mut_ptr(), num_fds as nfds_t, -1);
-        if res == -1 && errno!() != libc::EINTR {
-            die_with_error!(c"poll".as_ptr());
+        let pollfds =
+            unsafe { std::slice::from_raw_parts_mut(fds.as_mut_ptr().cast::<PollFd>(), fds_len) };
+        pollfds.iter_mut().for_each(|fd| {
+            fd.revents();
+        });
+        let res = nix::poll::poll(pollfds, PollTimeout::NONE);
+        if let Err(e) = res {
+            if e != Errno::EINTR {
+                panic!("poll: {e}");
+            }
         }
-        if event_fd != -1 {
-            s = read(event_fd, &mut val as *mut u64 as *mut libc::c_void, 8);
-            if s == -1 && errno!() != libc::EINTR && errno!() != libc::EAGAIN {
-                die_with_error!(c"read eventfd".as_ptr());
-            } else if s == 8 {
-                exitc = (val - 1) as i32;
-                report_child_exit_status(exitc, setup_finished_fd);
+        if let Some(fd) = &event_fd {
+            let mut val = 0u64;
+            let val_bytes = unsafe {
+                std::slice::from_raw_parts_mut(&raw mut val as *mut u8, size_of_val(&val))
+            };
+            let s = nix::unistd::read(fd.as_raw_fd(), val_bytes);
+            if !matches!(s, Err(Errno::EINTR | Errno::EAGAIN)) {
+                panic!("read eventfd: {}", s.unwrap_err());
+            } else if s == Ok(8) {
+                let exitc = (val - 1) as i32;
                 return exitc;
             }
         }
-        s = read(
-            signal_fd,
-            &mut fdsi as *mut signalfd_siginfo as *mut libc::c_void,
-            ::core::mem::size_of::<signalfd_siginfo>(),
-        );
-        if s == -1 && errno!() != libc::EINTR && errno!() != libc::EAGAIN {
-            die_with_error!(c"read signalfd".as_ptr());
+        let s = signal_fd.read_signal();
+        if !matches!(s, Err(Errno::EINTR | Errno::EAGAIN)) {
+            panic!("read signalfd: {}", s.unwrap_err());
         }
         loop {
-            died_pid = waitpid(-1, &mut died_status, libc::WNOHANG);
-            if !(died_pid > 0) {
+            let Ok(died_pid) = nix::sys::wait::waitpid(None, Some(WaitPidFlag::WNOHANG)) else {
                 break;
-            }
-            if died_pid == child_pid {
-                exitc = propagate_exit_status(died_status);
-                report_child_exit_status(exitc, setup_finished_fd);
+            };
+
+            if died_pid.pid() == Some(child_pid) {
+                let exitc = match died_pid {
+                    nix::sys::wait::WaitStatus::Exited(_, status) => status,
+                    nix::sys::wait::WaitStatus::Signaled(_, status, _) => 128 + status as i32,
+                    _ => 255,
+                };
                 return exitc;
             }
         }
     }
 }
 
-unsafe fn do_init(event_fd: libc::c_int, initial_pid: pid_t) -> libc::c_int {
+fn do_init(state: &State, event_fd: Option<EventFd>, initial_pid: Pid) -> libc::c_int {
     let mut initial_exit_status = 1;
-    let mut lock = lock_files;
-    while !lock.is_null() {
-        let fd = retry!(open((*lock).path, 0o2000000));
-        if fd == -1 {
-            die_with_error!(c"Unable to open lock file %s".as_ptr(), (*lock).path,);
-        }
-        let mut l = flock {
-            l_type: libc::F_RDLCK as libc::c_short,
-            l_whence: libc::SEEK_SET as libc::c_short,
-            l_start: 0,
-            l_len: 0,
-            l_pid: 0,
-        };
-        if retry!(fcntl(fd, 6, &mut l as *mut flock)) < 0 {
-            die_with_error!(c"Unable to lock file %s".as_ptr(), (*lock).path,);
-        }
-        (*lock).fd = fd;
-        lock = (*lock).next;
-    }
-    handle_die_with_parent();
-    seccomp_programs_apply();
+    handle_die_with_parent(state);
+    //seccomp_programs_apply();
     loop {
-        let mut child: pid_t = 0;
-        let mut status: libc::c_int = 0;
-        child = retry!(wait(&mut status));
-        if child == initial_pid {
-            initial_exit_status = propagate_exit_status(status);
-            if event_fd != -1 {
-                let mut val = (initial_exit_status + 1) as u64;
-                let _res: isize = retry!(write(event_fd, &raw mut val as *const libc::c_void, 8));
+        let child = nix_retry!(nix::sys::wait::wait());
+        match child {
+            Ok(c) if c.pid() == Some(initial_pid) => {
+                initial_exit_status = match c {
+                    nix::sys::wait::WaitStatus::Exited(_, status) => status,
+                    nix::sys::wait::WaitStatus::Signaled(_, status, _) => 128 + status as i32,
+                    _ => 255,
+                };
+                if let Some(fd) = &event_fd {
+                    let val = (initial_exit_status + 1) as u64;
+                    let val_bytes = unsafe {
+                        std::slice::from_raw_parts(&raw const val as *const u8, size_of_val(&val))
+                    };
+                    let _ = nix_retry!(nix::unistd::write(fd, &val_bytes));
+                }
             }
-        }
-        if !(child == -1 && errno!() != libc::EINTR) {
-            continue;
-        }
-        if errno!() != ECHILD {
-            die_with_error!(c"init wait()".as_ptr());
-        }
-        break;
-    }
-    lock = lock_files;
-    while !lock.is_null() {
-        if (*lock).fd >= 0 {
-            close((*lock).fd);
-            (*lock).fd = -1;
-        }
-        lock = (*lock).next;
+            Err(e) if e != Errno::ECHILD => {
+                panic!("init wait(): {e}")
+            }
+            Err(_) => break,
+            Ok(_) => {}
+        };
     }
     return initial_exit_status;
 }
@@ -814,43 +755,20 @@ fn set_required_caps() -> Result<(), CapsError> {
     Ok(())
 }
 
-unsafe fn drop_all_caps(keep_requested_caps: bool) {
-    let mut hdr = __user_cap_header_struct {
-        version: _LINUX_CAPABILITY_VERSION_3 as u32,
-        pid: 0,
+fn drop_all_caps(state: &State, keep_requested_caps: bool) -> Result<(), caps::errors::CapsError> {
+    let set = if keep_requested_caps {
+        if !state.change_cap && state.real_uid.is_root() {
+            assert!(!state.is_privileged);
+            return Ok(());
+        }
+        state.requested_caps.clone()
+    } else {
+        CapsHashSet::new()
     };
-
-    let mut data: [__user_cap_data_struct; 2] = [
-        __user_cap_data_struct {
-            effective: 0,
-            permitted: 0,
-            inheritable: 0,
-        },
-        __user_cap_data_struct {
-            effective: 0,
-            permitted: 0,
-            inheritable: 0,
-        },
-    ];
-    if keep_requested_caps {
-        if !opt_cap_add_or_drop_used && real_uid == 0 {
-            assert!(!is_privileged);
-            return;
-        }
-        data[0].effective = requested_caps[0];
-        data[0].permitted = requested_caps[0];
-        data[0].inheritable = requested_caps[0];
-        data[1].effective = requested_caps[1];
-        data[1].permitted = requested_caps[1];
-        data[1].inheritable = requested_caps[1];
-    }
-    if capset(&mut hdr, data.as_mut_ptr()) < 0 {
-        if errno!() == EPERM && real_uid == 0 && !is_privileged {
-            return;
-        } else {
-            die_with_error!(c"capset failed".as_ptr());
-        }
-    }
+    caps::set(None, caps::CapSet::Effective, &set)?;
+    caps::set(None, caps::CapSet::Permitted, &set)?;
+    caps::set(None, caps::CapSet::Inheritable, &set)?;
+    Ok(())
 }
 
 unsafe fn has_caps() -> bool {
@@ -936,20 +854,19 @@ unsafe fn prctl_caps(caps: *mut u32, do_cap_bounding: bool, do_set_ambient: bool
     }
 }
 
-unsafe fn drop_cap_bounding_set(drop_all: bool) {
+fn drop_cap_bounding_set(state: &State, drop_all: bool) {
     if !drop_all {
-        prctl_caps(requested_caps.as_mut_ptr(), true, false);
+        prctl_caps_rust(state.requested_caps.clone(), true, false);
     } else {
-        let mut no_caps: [u32; 2] = [0, 0];
-        prctl_caps(no_caps.as_mut_ptr(), true, false);
+        prctl_caps_rust(Default::default(), true, false);
     };
 }
 
-unsafe fn set_ambient_capabilities() {
-    if is_privileged {
+fn set_ambient_capabilities(state: &State) {
+    if state.is_privileged {
         return;
     }
-    prctl_caps(requested_caps.as_mut_ptr(), false, true);
+    prctl_caps_rust(state.requested_caps.clone(), false, true);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -998,104 +915,104 @@ fn acquire_privs(state: &mut State) -> Result<(), AcquirePrivError> {
     Ok(())
 }
 
-unsafe fn switch_to_user_with_privs() {
-    if opt_unshare_user as libc::c_int != 0 || opt_userns_fd != -1 {
-        drop_cap_bounding_set(false);
+fn switch_to_user_with_privs(state: &State) {
+    if state.unshare_user {
+        drop_cap_bounding_set(state, false);
     }
-    if opt_userns_fd != -1 {
-        if opt_sandbox_uid != real_uid && setuid(opt_sandbox_uid) < 0 {
-            die_with_error!(c"unable to switch to uid %d".as_ptr(), opt_sandbox_uid,);
-        }
-        if opt_sandbox_gid != real_gid && setgid(opt_sandbox_gid) < 0 {
-            die_with_error!(c"unable to switch to gid %d".as_ptr(), opt_sandbox_gid,);
-        }
-    }
-    if !is_privileged {
+    if !state.is_privileged {
         return;
     }
-    if prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) < 0 {
-        die_with_error!(c"prctl(PR_SET_KEEPCAPS) failed".as_ptr());
+    if let Err(e) = nix::sys::prctl::set_keepcaps(true) {
+        panic!("prctl(PR_SET_KEEPCAPS) failed: {e}");
     }
-    if setuid(opt_sandbox_uid) < 0 {
-        die_with_error!(c"unable to drop root uid".as_ptr());
+    if let Err(e) = nix::unistd::setuid(state.sandbox_uid.unwrap_or(state.real_uid)) {
+        panic!("unable to drop root uid: {e}");
     }
     set_required_caps();
 }
 
-unsafe fn drop_privs(keep_requested_caps: bool, already_changed_uid: bool) {
-    assert!(!keep_requested_caps || !is_privileged);
-    if is_privileged as libc::c_int != 0 && !already_changed_uid && setuid(opt_sandbox_uid) < 0 {
-        die_with_error!(c"unable to drop root uid".as_ptr());
+fn drop_privs(state: &State, keep_requested_caps: bool, already_changed_uid: bool) {
+    assert!(!keep_requested_caps || !state.is_privileged);
+    if state.is_privileged && !already_changed_uid {
+        if let Err(e) = nix::unistd::setuid(state.sandbox_uid.unwrap_or(state.real_uid)) {
+            panic!("unable to drop root uid: {e}");
+        }
     }
-    drop_all_caps(keep_requested_caps);
-    if prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 {
-        die_with_error!(c"can't set dumpable".as_ptr());
+    drop_all_caps(state, keep_requested_caps);
+    if let Err(e) = nix::sys::prctl::set_dumpable(true) {
+        panic!("can't set dumpable: {e}");
     }
 }
 
-unsafe fn write_uid_gid_map(
-    sandbox_uid: uid_t,
-    parent_uid: uid_t,
-    sandbox_gid: uid_t,
-    parent_gid: uid_t,
-    pid: pid_t,
+fn write_uid_gid_map(
+    state: &State,
+    sandbox_uid: Uid,
+    parent_uid: Uid,
+    sandbox_gid: Gid,
+    parent_gid: Gid,
+    pid: Option<Pid>,
     deny_groups: bool,
     map_root: bool,
 ) {
-    let mut uid_map = std::ptr::null_mut() as *mut libc::c_char;
-    let mut gid_map = std::ptr::null_mut() as *mut libc::c_char;
-    let mut dir = std::ptr::null_mut() as *mut libc::c_char;
-    let mut dir_fd = -1;
-    let mut old_fsuid = uid_t::MAX;
-    if pid == -1 {
-        dir = xstrdup(c"self".as_ptr());
+    use std::io::Write;
+    let dir: Cow<'static, CStr> = if let Some(pid) = pid {
+        CString::new(format!("{pid}").into_bytes()).unwrap().into()
     } else {
-        dir = xasprintf(c"%d".as_ptr(), pid);
-    }
-    dir_fd = openat(proc_fd, dir, libc::O_PATH);
-    if dir_fd < 0 {
-        die_with_error!(c"open /proc/%s failed".as_ptr(), dir,);
-    }
-    if map_root as libc::c_int != 0 && parent_uid != 0 && sandbox_uid != 0 {
-        uid_map = xasprintf(
-            c"0 %d 1\n%d %d 1\n".as_ptr(),
-            overflow_uid,
-            sandbox_uid,
-            parent_uid,
-        );
+        c"self".into()
+    };
+    let dir_fd = match nix::fcntl::openat(
+        state.proc_fd.as_ref().map(|fd| fd.as_raw_fd()),
+        &*dir,
+        OFlag::O_PATH,
+        Mode::empty(),
+    ) {
+        Err(e) => panic!("open /proc/{} failed: {e}", dir.to_string_lossy()),
+        Ok(fd) => unsafe { OwnedFd::from_raw_fd(fd) },
+    };
+    let mut uid_map = Vec::with_capacity(128);
+    if map_root && !parent_uid.is_root() && !sandbox_uid.is_root() {
+        writeln!(
+            &mut uid_map,
+            "0 {} 1\n{} {} 1",
+            state.overflow_uid, sandbox_uid, parent_uid,
+        )
+        .unwrap();
     } else {
-        uid_map = xasprintf(c"%d %d 1\n".as_ptr(), sandbox_uid, parent_uid);
+        writeln!(&mut uid_map, "{} {} 1", sandbox_uid, parent_uid,).unwrap();
     }
-    if map_root as libc::c_int != 0 && parent_gid != 0 && sandbox_gid != 0 {
-        gid_map = xasprintf(
-            c"0 %d 1\n%d %d 1\n".as_ptr(),
-            overflow_gid,
-            sandbox_gid,
-            parent_gid,
-        );
+    let mut gid_map = Vec::with_capacity(128);
+    if map_root && parent_gid.as_raw() != 0 && sandbox_gid.as_raw() != 0 {
+        writeln!(
+            &mut gid_map,
+            "0 {} 1\n{} {} 1",
+            state.overflow_gid, sandbox_gid, parent_gid,
+        )
+        .unwrap();
     } else {
-        gid_map = xasprintf(c"%d %d 1\n".as_ptr(), sandbox_gid, parent_gid);
+        writeln!(&mut gid_map, "{} {} 1", sandbox_gid, parent_gid,).unwrap();
     }
-    if is_privileged {
-        old_fsuid = setfsuid(0) as uid_t;
+    let old_fsuid = if state.is_privileged {
+        Some(nix::unistd::setfsuid(Uid::from_raw(0)))
+    } else {
+        None
+    };
+    if let Err(e) = write_file_at_rust(Some(dir_fd.as_fd()), c"uid_map", &uid_map) {
+        panic!("setting up uid map: {e}");
     }
-    if write_file_at(dir_fd, c"uid_map".as_ptr(), uid_map) != 0 {
-        die_with_error!(c"setting up uid map".as_ptr());
-    }
-    if deny_groups as libc::c_int != 0
-        && write_file_at(dir_fd, c"setgroups".as_ptr(), c"deny\n".as_ptr()) != 0
-    {
-        if errno!() != ENOENT {
-            die_with_error!(c"error writing to setgroups".as_ptr());
+    if deny_groups {
+        if let Err(e) = write_file_at_rust(Some(dir_fd.as_fd()), c"setgroups", b"deny\n") {
+            if e != Errno::ENOENT {
+                panic!("error writing to setgroups: {e}");
+            }
         }
     }
-    if write_file_at(dir_fd, c"gid_map".as_ptr(), gid_map) != 0 {
-        die_with_error!(c"setting up gid map".as_ptr());
+    if let Err(e) = write_file_at_rust(Some(dir_fd.as_fd()), c"gid_map", &gid_map) {
+        panic!("setting up gid map: {e}");
     }
-    if is_privileged {
-        setfsuid(old_fsuid);
-        if setfsuid(uid_t::MAX) as uid_t != real_uid {
-            die!(c"Unable to re-set fsuid".as_ptr());
+    if state.is_privileged {
+        nix::unistd::setfsuid(old_fsuid.unwrap());
+        if nix::unistd::setfsuid(Uid::from_raw(u32::MAX)) != state.real_uid {
+            panic!("Unable to re-set fsuid");
         }
     }
 }
@@ -1161,95 +1078,9 @@ fn print_version_and_exit() -> ! {
     std::process::exit(0);
 }
 
-unsafe fn is_modifier_option(option: *const libc::c_char) -> libc::c_int {
-    return (strcmp(option, c"--perms".as_ptr()) == 0 || strcmp(option, c"--size".as_ptr()) == 0)
-        as libc::c_int;
-}
-
-unsafe fn warn_only_last_option(mut _name: *const libc::c_char) {
-    bwrap_log!(
-        LOG_WARNING,
-        c"Only the last %s option will take effect".as_ptr(),
-        name,
-    );
-}
-
-unsafe fn make_setup_overlay_src_ops(argv: *const *const libc::c_char) {
-    let mut i: libc::c_int = 0;
-    let mut op = 0 as *mut SetupOp;
-    i = 1;
-    while i <= next_overlay_src_count {
-        op = setup_op_new(SETUP_OVERLAY_SRC);
-        (*op).source = *argv.offset((1 - 2 * i) as isize);
-        i += 1;
-    }
-    next_overlay_src_count = 0;
-}
-
-unsafe fn namespace_ids_read(pid: pid_t) {
-    let mut dir = std::ptr::null_mut() as *mut libc::c_char;
-    let mut ns_fd = -1;
-    let mut info = 0 as *mut NsInfo;
-    dir = xasprintf(c"%d/ns".as_ptr(), pid);
-    ns_fd = ({
-        let mut __result: libc::c_long = 0;
-        loop {
-            __result = openat(proc_fd, dir, 0o10000000) as libc::c_long;
-            if !(__result == -1 && errno!() == libc::EINTR) {
-                break;
-            }
-        }
-        __result
-    }) as libc::c_int;
-    if ns_fd < 0 {
-        die_with_error!(c"open /proc/%s/ns failed".as_ptr(), dir,);
-    }
-    info = ns_infos.as_mut_ptr();
-    while !((*info).name).is_null() {
-        let do_unshare = (*info).do_unshare;
-        let mut st = std::mem::zeroed();
-        let mut r: libc::c_int = 0;
-        if !(!do_unshare.is_null() && *do_unshare as bool == false) {
-            r = fstatat(ns_fd, (*info).name, &mut st, 0);
-            if !(r != 0) {
-                (*info).id = st.st_ino;
-            }
-        }
-        info = info.offset(1);
-    }
-}
-
-unsafe fn namespace_ids_write(fd: libc::c_int, in_json: bool) {
-    let mut info = 0 as *mut NsInfo;
-    info = ns_infos.as_mut_ptr();
-    while !((*info).name).is_null() {
-        let mut output = std::ptr::null_mut() as *mut libc::c_char;
-        let mut indent = 0 as *const libc::c_char;
-        let mut nsid: uintmax_t = 0;
-        nsid = (*info).id;
-        if !(nsid == 0) {
-            indent = if in_json as libc::c_int != 0 {
-                c" ".as_ptr()
-            } else {
-                c"\n    ".as_ptr()
-            };
-            output = xasprintf(
-                c",%s\"%s-namespace\": %ju".as_ptr(),
-                indent,
-                (*info).name,
-                nsid,
-            );
-            dump_info(fd, output, true);
-        }
-        info = info.offset(1);
-    }
-}
-
-pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> libc::c_int {
-    if argc == 2 && strcmp(*argv.offset(1), c"--version".as_ptr()) == 0 {
-        print_version_and_exit();
-    }
+pub fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> libc::c_int {
     let mut state = State::new().expect("TODO:");
+    state.env = std::env::vars_os().collect();
 
     acquire_privs(&mut state);
     nix::sys::prctl::set_no_new_privs().expect("TODO:");
@@ -1260,7 +1091,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if !state.requested_caps.is_empty() && state.is_privileged {
         panic!("--cap-add in setuid mode can be used only by root");
     }
-    if state.disable_userns as libc::c_int != 0 && !state.unshare_user {
+    if state.disable_userns && !state.unshare_user {
         panic!("--disable-userns requires --unshare-user");
     }
     if !state.unshare_user_try && nix::sys::stat::stat(c"/proc/self/ns/user").is_ok() {
@@ -1310,7 +1141,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if let Err(e) = proc_fd {
         panic!("Can't open /proc: {e}");
     }
-    state.proc_fd = Some(OwnedFd::from_raw_fd(proc_fd.unwrap()));
+    state.proc_fd = Some(unsafe { OwnedFd::from_raw_fd(proc_fd.unwrap()) });
     let base_path = c"/tmp";
     let event_fd = if state.unshare_pid && !state.as_pid1 {
         match nix::sys::eventfd::EventFd::from_value_and_flags(
@@ -1324,7 +1155,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         None
     };
     block_sigchild();
-    let clone_flags: CloneFlags =
+    let mut clone_flags: CloneFlags =
         CloneFlags::from_bits_retain(Signal::SIGCHLD as _) | CloneFlags::CLONE_NEWNS;
     if state.unshare_user {
         clone_flags |= CloneFlags::CLONE_NEWUSER;
@@ -1357,14 +1188,13 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             clone_flags |= CloneFlags::CLONE_NEWCGROUP;
         }
     }
-    let child_wait_fd = nix::sys::eventfd::EventFd::from_value_and_flags(
+    let child_wait_fd = match nix::sys::eventfd::EventFd::from_value_and_flags(
         0,
         nix::sys::eventfd::EfdFlags::EFD_CLOEXEC,
-    );
-    if let Err(e) = child_wait_fd {
-        panic!("eventfd(): {e}");
-    }
-    let child_wait_fd = child_wait_fd.unwrap();
+    ) {
+        Err(e) => panic!("eventfd(): {e}"),
+        Ok(fd) => fd,
+    };
     let pid = match raw_clone(clone_flags) {
         Err(e) => {
             if state.unshare_user {
@@ -1388,32 +1218,34 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     let mut ns_uid = state.sandbox_uid.unwrap();
     let mut ns_gid = state.sandbox_gid.unwrap();
     if pid.as_raw() != 0 {
-        namespace_ids_read(pid.as_raw());
         if state.is_privileged && state.unshare_user {
             write_uid_gid_map(
-                ns_uid.as_raw(),
-                state.real_uid.as_raw(),
-                ns_gid.as_raw(),
-                state.real_gid.as_raw(),
-                pid.as_raw(),
+                &state,
+                ns_uid,
+                state.real_uid,
+                ns_gid,
+                state.real_gid,
+                Some(pid),
                 true,
                 state.needs_devpts,
             );
         }
-        drop_privs(false, false);
+        drop_privs(&state, false, false);
         handle_die_with_parent(&state);
-        let val = 1;
-        let res = retry!(write(
-            child_wait_fd,
-            &mut val as *mut u64 as *const libc::c_void,
-            8,
-        )) as _;
-        close(child_wait_fd);
-        return monitor_child(event_fd, pid.as_raw(), setup_finished_pipe[0]);
+        let mut val = 1;
+        let val_bytes =
+            unsafe { std::slice::from_raw_parts_mut(&raw mut val as *mut u8, size_of_val(&val)) };
+
+        let _ = nix_retry!(nix::unistd::write(child_wait_fd.as_fd(), val_bytes));
+        drop(child_wait_fd);
+        return monitor_child(&state, event_fd, pid, None);
     }
-    let res = read(child_wait_fd, &mut val as *mut u64 as *mut libc::c_void, 8) as libc::c_int;
-    close(child_wait_fd);
-    switch_to_user_with_privs();
+    let mut val = 1;
+    let val_bytes =
+        unsafe { std::slice::from_raw_parts_mut(&raw mut val as *mut u8, size_of_val(&val)) };
+    let _ = nix::unistd::read(child_wait_fd.as_raw_fd(), val_bytes);
+    drop(child_wait_fd);
+    switch_to_user_with_privs(&state);
     if state.unshare_net {
         loopback_setup().unwrap();
     }
@@ -1425,11 +1257,12 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             ns_gid = 0.into();
         }
         write_uid_gid_map(
-            ns_uid.as_raw(),
-            state.real_uid.as_raw(),
-            ns_gid.as_raw(),
-            state.real_gid.as_raw(),
-            -1,
+            &state,
+            ns_uid,
+            state.real_uid,
+            ns_gid,
+            state.real_gid,
+            None,
             true,
             false,
         );
@@ -1437,11 +1270,11 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     let old_umask = nix::sys::stat::umask(Mode::empty());
     resolve_symlinks_in_ops(&mut state.operations);
     if let Err(e) = nix::mount::mount(
-        None,
+        Option::<&CStr>::None,
         c"/",
-        None,
+        Option::<&CStr>::None,
         MsFlags::MS_SILENT | MsFlags::MS_SLAVE | MsFlags::MS_REC,
-        None,
+        Option::<&CStr>::None,
     ) {
         panic!("Failed to make / slave: {e}");
     }
@@ -1450,7 +1283,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         base_path,
         Some(c"tmpfs"),
         MsFlags::MS_NODEV | MsFlags::MS_NOSUID,
-        None,
+        Option::<&CStr>::None,
     ) {
         panic!("Failed to mount tmpfs: {e}");
     }
@@ -1461,21 +1294,17 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     if let Err(e) = nix::unistd::mkdir(c"newroot", Mode::from_bits_truncate(0o755)) {
         panic!("Creating newroot failed: {e}");
     }
-    if mount(
-        c"newroot".as_ptr(),
-        c"newroot".as_ptr(),
-        std::ptr::null_mut() as *const libc::c_char,
-        (MS_SILENT as libc::c_uint
-            | MS_MGC_VAL as libc::c_uint
-            | MS_BIND as libc::c_uint
-            | MS_REC as libc::c_uint) as libc::c_ulong,
-        std::ptr::null_mut() as *const libc::c_void,
-    ) < 0
-    {
-        die_with_mount_error!(c"setting up newroot bind".as_ptr());
+    if let Err(e) = nix::mount::mount(
+        Some(c"newroot"),
+        c"newroot",
+        Option::<&CStr>::None,
+        MsFlags::MS_SILENT | MsFlags::MS_MGC_VAL | MsFlags::MS_BIND | MsFlags::MS_REC,
+        Option::<&CStr>::None,
+    ) {
+        panic!("setting up newroot bind: {e}");
     }
-    if mkdir(c"oldroot".as_ptr(), 0o755) != 0 {
-        die_with_error!(c"Creating oldroot failed".as_ptr());
+    if let Err(e) = nix::unistd::mkdir(c"oldroot", Mode::from_bits_truncate(0o755)) {
+        panic!("Creating oldroot failed: {e}");
     }
     for i in 0..state.tmp_overlay_coumt {
         let dirname = format!("tmp-overlay-upper-{i}");
@@ -1494,28 +1323,27 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
         panic!("chdir / (base path): {e}");
     }
     if state.is_privileged {
-        let mut child: pid_t = 0;
-        let mut privsep_sockets: [libc::c_int; 2] = [0; 2];
-        if socketpair(
-            AF_UNIX,
-            SOCK_SEQPACKET | SOCK_CLOEXEC,
-            0,
-            privsep_sockets.as_mut_ptr(),
-        ) != 0
-        {
-            die_with_error!(c"Can't create privsep socket".as_ptr());
-        }
-        child = fork();
-        if child == -1 {
-            die_with_error!(c"Can't fork unprivileged helper".as_ptr());
-        }
-        if child == 0 {
-            drop_privs(false, true);
-            close(privsep_sockets[0]);
-            setup_newroot(opt_unshare_pid, privsep_sockets[1]);
-            exit(0);
-        } else {
-            fn handle_priv_op<'fd, 'buf>(
+        let privsep_sockets = match nix::sys::socket::socketpair(
+            nix::sys::socket::AddressFamily::Unix,
+            nix::sys::socket::SockType::SeqPacket,
+            nix::sys::socket::SockProtocol::NetlinkRoute,
+            SockFlag::SOCK_CLOEXEC,
+        ) {
+            Err(e) => panic!("Can't create privsep socket: {e}"),
+            Ok(fd) => fd,
+        };
+        let child = match unsafe { nix::unistd::fork() } {
+            Err(e) => panic!("Can't fork unprivileged helper: {e}"),
+            Ok(r) => r,
+        };
+        if let ForkResult::Child = child {
+            drop_privs(&state, false, nix::sys::socket::SockProtocolrue);
+            nix::unistd::close(privsep_sockets.0.as_raw_fd());
+            setup_newroot(&mut state, Some(privsep_sockets.1.as_raw_fd()));
+            std::process::exit(0);
+        } else if let ForkResult::Parent { child } = child {
+            fn handle_priv_op<'s, 'fd, 'buf>(
+                state: &'s State,
                 fd: BorrowedFd<'fd>,
                 buffer: &'buf mut [u8],
             ) -> Result<(bool, &'buf mut [u8]), ()> {
@@ -1524,7 +1352,7 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                 let msg: PrivilegedOp = postcard::from_bytes(&buffer[..bytes]).map_err(|_| ())?;
 
                 let end = matches!(msg, PrivilegedOp::Done);
-                let ret = privileged_op(-1, msg);
+                let ret = privileged_op(state, None, msg);
                 buffer.fill(0);
 
                 postcard::to_slice(&ret, &mut buffer[..])
@@ -1532,23 +1360,24 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                     .map(|b| (end, b))
             }
 
-            let unpriv_socket = unsafe { OwnedFd::from_raw_fd(privsep_sockets[0]) };
+            let unpriv_socket = privsep_sockets.0;
             let mut buffer = vec![0; 8096];
-            let _ = nix::unistd::close(privsep_sockets[1]);
+            let _ = nix::unistd::close(privsep_sockets.1.as_raw_fd());
             loop {
-                let (end, buf) = match handle_priv_op(unpriv_socket.as_fd(), &mut buffer[..]) {
-                    Ok(o) => o,
-                    Err(()) => (
-                        true,
-                        postcard::to_slice(
-                            &Result::<(), _>::Err(
-                                PrivilegedOpError::PrivilegedProcessCommunicationError,
-                            ),
-                            &mut buffer[..],
-                        )
-                        .unwrap(),
-                    ),
-                };
+                let (end, buf) =
+                    match handle_priv_op(&state, unpriv_socket.as_fd(), &mut buffer[..]) {
+                        Ok(o) => o,
+                        Err(()) => (
+                            true,
+                            postcard::to_slice(
+                                &Result::<(), _>::Err(
+                                    PrivilegedOpError::PrivilegedProcessCommunicationError,
+                                ),
+                                &mut buffer[..],
+                            )
+                            .unwrap(),
+                        ),
+                    };
                 let Ok(_) = nix_retry!(nix::unistd::write(unpriv_socket.as_fd(), buf)) else {
                     break;
                 };
@@ -1557,45 +1386,41 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
                 };
             }
 
-            let _ = nix_retry!(nix::sys::wait::waitpid(
-                Some(nix::unistd::Pid::from_raw(child)),
-                None
-            ));
+            let _ = nix_retry!(nix::sys::wait::waitpid(Some(child), None));
         }
     } else {
-        setup_newroot(std::mem::take(&mut state.operations), state.unshare_pid, -1);
+        setup_newroot(&mut state, None);
     }
-    if mount(
-        c"oldroot".as_ptr(),
-        c"oldroot".as_ptr(),
-        std::ptr::null_mut() as *const libc::c_char,
-        (MS_SILENT | MS_REC | MS_PRIVATE) as libc::c_ulong,
-        std::ptr::null_mut() as *const libc::c_void,
-    ) != 0
-    {
-        die_with_mount_error!(c"Failed to make old root rprivate".as_ptr(),);
+    if let Err(e) = nix::mount::mount(
+        Some(c"oldroot"),
+        c"oldroot",
+        Option::<&CStr>::None,
+        MsFlags::MS_SILENT | MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+        Option::<&CStr>::None,
+    ) {
+        panic!("Failed to make old root rprivate: {e}");
     }
-    if umount2(c"oldroot".as_ptr(), MNT_DETACH) != 0 {
-        die_with_error!(c"unmount old root".as_ptr());
+    if let Err(e) = nix::mount::umount2(c"oldroot", MntFlags::MNT_DETACH) {
+        panic!("unmount old root: {e}");
     }
-    let oldrootfd = retry!(open(c"/".as_ptr(), 0o200000 | 0));
-    if oldrootfd < 0 {
-        die_with_error!(c"can't open /".as_ptr());
-    }
-    if chdir(c"/newroot".as_ptr()) != 0 {
-        die_with_error!(c"chdir /newroot".as_ptr());
+    let oldrootfd = match nix_retry!(nix::fcntl::open(c"/", OFlag::O_PATH, Mode::empty())) {
+        Err(e) => panic!("can't open /: {e}"),
+        Ok(fd) => unsafe { OwnedFd::from_raw_fd(fd) },
+    };
+    if let Err(e) = nix::unistd::chdir(c"/newroot") {
+        panic!("chdir /newroot: {e}");
     }
     if let Err(e) = pivot_root(c".", c".") {
         panic!("pivot_root(/newroot): {e}");
     }
-    if fchdir(oldrootfd) < 0 {
-        die_with_error!(c"fchdir to oldroot".as_ptr());
+    if let Err(e) = nix::unistd::fchdir(oldrootfd.as_raw_fd()) {
+        panic!("fchdir to oldroot: {e}");
     }
-    if umount2(c".".as_ptr(), MNT_DETACH) < 0 {
-        die_with_error!(c"umount old root".as_ptr());
+    if let Err(e) = nix::mount::umount2(c".", MntFlags::MNT_DETACH) {
+        panic!("umount old root: {e}");
     }
-    if chdir(c"/".as_ptr()) != 0 {
-        die_with_error!(c"chdir /".as_ptr());
+    if let Err(e) = nix::unistd::chdir(c"/") {
+        panic!("chdir /: {e}");
     }
     if state.unshare_user
         && (Some(ns_uid) != state.sandbox_uid
@@ -1603,82 +1428,79 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
             || state.disable_userns)
     {
         if state.disable_userns {
-            let mut sysctl_fd = -1;
-            sysctl_fd = retry!(openat(
-                proc_fd,
-                c"sys/user/max_user_namespaces".as_ptr(),
-                0o1
-            ));
-            if sysctl_fd < 0 {
-                die_with_error!(c"cannot open /proc/sys/user/max_user_namespaces".as_ptr()
-                    as *const u8 as *const libc::c_char,);
-            }
-            if write_to_fd(sysctl_fd, c"1".as_ptr(), 1) < 0 {
-                die_with_error!(c"sysctl user.max_user_namespaces = 1".as_ptr(),);
+            let sysctl_fd = match nix_retry!(nix::fcntl::openat(
+                state.proc_fd.as_ref().map(|f| f.as_raw_fd()),
+                c"sys/user/max_user_namespaces",
+                OFlag::O_WRONLY,
+                Mode::empty()
+            )) {
+                Err(e) => panic!("cannot open /proc/sys/user/max_user_namespaces: {e}"),
+                Ok(fd) => unsafe { OwnedFd::from_raw_fd(fd) },
+            };
+            if let Err(e) = write_to_fd_rust(sysctl_fd.as_fd(), b"1") {
+                panic!("sysctl user.max_user_namespaces = 1: {e}");
             }
         }
-        if unshare(CLONE_NEWUSER) != 0 {
-            die_with_error!(c"unshare user ns".as_ptr());
+        if let Err(e) = nix::sched::unshare(CloneFlags::CLONE_NEWUSER) {
+            panic!("unshare user ns: {e}");
         }
-        drop_cap_bounding_set(false);
+        drop_cap_bounding_set(&state, false);
         write_uid_gid_map(
-            state.sandbox_uid,
+            &state,
+            state.sandbox_uid.unwrap(),
             ns_uid,
-            state.sandbox_gid,
+            state.sandbox_gid.unwrap(),
             ns_gid,
-            -1,
+            None,
             false,
             false,
         );
     }
     if state.disable_userns || state.assert_userns_disable {
-        res = unshare(CLONE_NEWUSER);
-        if res == 0 {
-            panic!("creation of new user namespaces was not disabled as requested");
+        if let Err(e) = nix::sched::unshare(CloneFlags::CLONE_NEWUSER) {
+            panic!("creation of new user namespaces was not disabled as requested: {e}");
         }
     }
-    drop_privs(!state.is_privileged, true);
+    drop_privs(&state, !state.is_privileged, true);
     nix::sys::stat::umask(old_umask);
-    let new_cwd = PathBuf::from("/");
-    if let Some(chdir) = state.chdir_path {
-        if let Err(e) = nix::unistd::chdir(&chdir) {
+    let mut new_cwd = PathBuf::from("/");
+    if let Some(ref chdir) = state.chdir_path {
+        if let Err(e) = nix::unistd::chdir(chdir) {
             panic!("Can't chdir to {}: {e}", chdir.display());
         }
-        new_cwd = chdir;
-    } else if chdir(old_cwd) == 0 {
+        new_cwd = chdir.to_path_buf();
+    } else if nix::unistd::chdir(&old_cwd).is_ok() {
         new_cwd = old_cwd;
     } else {
         let home = std::env::var_os("HOME");
-        if let Some(Ok(())) = home.map(|p| nix::unistd::chdir(p.as_os_str())) {
+        if let Some(Ok(())) = home.as_ref().map(|p| nix::unistd::chdir(p.as_os_str())) {
             new_cwd = home.unwrap().into();
         }
     }
     std::env::set_var("PWD", new_cwd);
-    free(old_cwd as *mut libc::c_void);
-    if state.new_session && setsid() == -1 {
-        die_with_error!(c"setsid".as_ptr());
-    }
-    if !state.as_pid1 && (state.unshare_pid || !lock_files.is_null()) {
-        let pid = fork();
-        if pid == -1 {
-            die_with_error!(c"Can't fork for pid 1".as_ptr());
+    if state.new_session {
+        if let Err(e) = nix::unistd::setsid() {
+            panic!("setsid: {e}");
         }
-        if pid != 0 {
-            drop_all_caps(false);
-            let mut dont_close: [libc::c_int; 3] = [0; 3];
+    }
+    if !state.as_pid1 && state.unshare_pid {
+        let fork_result = match unsafe { nix::unistd::fork() } {
+            Err(e) => panic!("Can't fork for pid 1: {e}"),
+            Ok(pid) => pid,
+        };
+        if let ForkResult::Parent { child } = fork_result {
+            drop_all_caps(&state, false);
+            let mut dont_close: [RawFd; 3] = [0; 3];
             let mut j = 0;
-            if event_fd != -1 {
-                dont_close[j] = event_fd;
-                j = j + 1;
+            if let Some(fd) = &event_fd {
+                dont_close[j] = fd.as_raw_fd();
+                j += 1;
             }
-            dont_close[j] = -1;
-            j = j + 1;
             fdwalk(
-                proc_fd,
-                Some(close_extra_fds as unsafe fn(*mut libc::c_void, libc::c_int) -> libc::c_int),
-                dont_close.as_mut_ptr() as *mut libc::c_void,
+                state.proc_fd.as_ref().map(|f| f.as_fd()).unwrap(),
+                close_extra_fds_closure(&dont_close[..j]),
             );
-            return do_init(event_fd, pid);
+            return do_init(&state, event_fd, child);
         }
     }
     // we close proc_fd
@@ -1687,13 +1509,16 @@ pub unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) ->
     unblock_sigchild();
     handle_die_with_parent(&state);
     if !state.is_privileged {
-        set_ambient_capabilities();
+        set_ambient_capabilities(&state);
     }
-    seccomp_programs_apply();
-    exec_path = *argv.offset(0);
+
+    todo!()
+    /*
+    let exec_path = *argv.offset(0);
     // TODO: change to execvep, and create manual array of envvar
     if execvp(exec_path, argv as *const *const libc::c_char) == -1 {
         die_with_error!(c"execvp %s".as_ptr(), exec_path,);
     }
     return 0;
+    */
 }

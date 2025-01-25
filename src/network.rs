@@ -233,10 +233,6 @@ pub fn loopback_setup() -> Result<(), LoopbackSetupError> {
                 ifa_index: if_loopback,
             });
     };
-    println!(
-        "len = {}",
-        unsafe { &*(&raw mut buffer[0]).cast::<nlmsghdr>() }.nlmsg_len
-    );
 
     unsafe {
         add_rta(

@@ -161,11 +161,11 @@ pub const MAX_TMPFS_BYTES: NonZeroUsize = NonZeroUsize::new(usize::MAX >> 1).unw
 
 pub fn privileged_op(
     state: &crate::foil::State,
-    privileged_op_fd: RawFd,
+    privileged_op_fd: Option<RawFd>,
     op: PrivilegedOp,
 ) -> Result<(), PrivilegedOpError> {
-    if privileged_op_fd != -1 {
-        return send_priviledged_op(privileged_op_fd, op);
+    if let Some(fd) = privileged_op_fd {
+        return send_priviledged_op(fd, op);
     }
     let Some(proc_fd) = state.proc_fd.as_ref().map(|fd| fd.as_fd()) else {
         panic!("PrivilegedOp without a proc_fd !");
