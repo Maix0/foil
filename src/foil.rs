@@ -1337,7 +1337,7 @@ pub fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> libc::
             Ok(r) => r,
         };
         if let ForkResult::Child = child {
-            drop_privs(&state, false, nix::sys::socket::SockProtocolrue);
+            drop_privs(&state, false, true);
             nix::unistd::close(privsep_sockets.0.as_raw_fd());
             setup_newroot(&mut state, Some(privsep_sockets.1.as_raw_fd()));
             std::process::exit(0);
