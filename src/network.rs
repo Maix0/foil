@@ -1,9 +1,9 @@
-use crate::types::*;
-use crate::*;
-use ::libc;
+use ::libc::nlmsghdr;
 use nix::sys::socket::{AddressFamily, MsgFlags, NetlinkAddr, SockFlag, SockProtocol, SockType};
 
 use std::os::fd::{AsRawFd, RawFd};
+
+use crate::utils::nix_retry;
 
 #[repr(C)]
 #[derive(Debug)]

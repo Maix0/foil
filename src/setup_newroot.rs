@@ -6,17 +6,13 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
-use crate::retry;
+use crate::utils::libc_retry;
 use crate::{
-    errno,
+    bind_mount::BindOptions,
+    foil::SetupOp,
     privilged_op::{self, privileged_op, PrivilegedOp},
-    types::{
-        BindOptions,
-        SetupOp,
-    },
 };
 
-use bitflags::Flags;
 use bstr::{BStr, ByteSlice};
 use nix::errno::Errno;
 use nix::sys::stat::Mode;
@@ -155,18 +151,15 @@ fn write_to_fd(fd: std::os::fd::BorrowedFd<'_>, mut content: &[u8]) -> nix::Resu
     Ok(())
 }
 
-fn create_file_rust(
+fn create_file(
     p: impl AsRef<Path>,
     mode: Mode,
     content: Option<impl AsRef<[u8]>>,
 ) -> nix::Result<()> {
     fn create_file_inner(p: &Path, mode: Mode, content: Option<&[u8]>) -> nix::Result<()> {
-        let file = match p.with_nix_path(|p| {
-            match retry!(unsafe { libc::creat(p.as_ptr(), mode.bits()) }) {
-                -1 => Err(nix::errno::Errno::last()),
-                fd => Ok(fd),
-            }
-        }) {
+        let file = match p
+            .with_nix_path(|p| libc_retry!(unsafe { libc::creat(p.as_ptr(), mode.bits()) }))
+        {
             Err(e) | Ok(Err(e)) => Err(e),
             Ok(Ok(fd)) => Ok(unsafe { OwnedFd::from_raw_fd(fd) }),
         }?;
@@ -183,7 +176,7 @@ const fn S_ISTYPE(mode: u32, mask: u32) -> bool {
     (mode & libc::S_IFMT) == mask
 }
 
-fn ensure_file_rust(p: impl AsRef<Path>, mode: Mode) -> nix::Result<()> {
+fn ensure_file(p: impl AsRef<Path>, mode: Mode) -> nix::Result<()> {
     fn ensure_file_inner(p: &Path, mode: Mode) -> nix::Result<()> {
         if let Ok(stat) = nix::sys::stat::stat(p) {
             if !S_ISTYPE(stat.st_mode, libc::S_IFDIR) && !S_ISTYPE(stat.st_mode, libc::S_IFLNK) {
@@ -191,7 +184,7 @@ fn ensure_file_rust(p: impl AsRef<Path>, mode: Mode) -> nix::Result<()> {
             }
         }
 
-        match create_file_rust(p, mode, Option::<&[u8]>::None) {
+        match create_file(p, mode, Option::<&[u8]>::None) {
             Ok(_) | Err(nix::errno::Errno::EEXIST) => Ok(()),
             Err(e) => Err(e),
         }
@@ -200,7 +193,7 @@ fn ensure_file_rust(p: impl AsRef<Path>, mode: Mode) -> nix::Result<()> {
     ensure_file_inner(p.as_ref(), mode)
 }
 
-fn ensure_dir_rust(p: impl AsRef<Path>, mode: Mode) -> nix::Result<()> {
+fn ensure_dir_(p: impl AsRef<Path>, mode: Mode) -> nix::Result<()> {
     fn ensure_dir_inner(p: &Path, mode: Mode) -> nix::Result<()> {
         if let Ok(stat) = nix::sys::stat::stat(p) {
             if !S_ISTYPE(stat.st_mode, libc::S_IFDIR) {
@@ -217,7 +210,7 @@ fn ensure_dir_rust(p: impl AsRef<Path>, mode: Mode) -> nix::Result<()> {
     ensure_dir_inner(p.as_ref(), mode)
 }
 
-fn copy_file_data_rust(src: BorrowedFd<'_>, dest: BorrowedFd<'_>) -> nix::Result<usize> {
+fn copy_file_data(src: BorrowedFd<'_>, dest: BorrowedFd<'_>) -> nix::Result<usize> {
     let mut buffer = [0u8; 8096];
     let mut total = 0;
     loop {
@@ -305,10 +298,10 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                 let (src, src_perms) = get_src!(src, *allow_not_exist);
                 let dest = get_dest!(dest, *perms);
                 if src_perms.bits() == libc::S_IFDIR {
-                    if let Err(e) = ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)) {
+                    if let Err(e) = ensure_dir_(&dest, Mode::from_bits_truncate(0o755)) {
                         panic!("TODO: Can't mkdir {}: {e} ", dest.display());
                     }
-                } else if let Err(e) = ensure_file_rust(&dest, Mode::from_bits_truncate(0o444)) {
+                } else if let Err(e) = ensure_file(&dest, Mode::from_bits_truncate(0o444)) {
                     panic!("TODO: Can't create file {}: {e} ", dest.display());
                 }
                 privileged_op(
@@ -339,7 +332,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                     }
                     _ => unreachable!(),
                 };
-                ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755))
+                ensure_dir_(&dest, Mode::from_bits_truncate(0o755))
                     .expect("TODO: Can't mkdir dest");
                 if let Some((src, _)) = source.as_ref() {
                     write!(&mut options, "upperdir=/oldroot");
@@ -391,7 +384,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
             }
             SetupOp::MountProc { dest, perms } => {
                 let dest = get_dest!(dest, *perms);
-                if ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)).is_err() {
+                if ensure_dir_(&dest, Mode::from_bits_truncate(0o755)).is_err() {
                     panic!("Can't mkdir {}", dest.display());
                 }
                 if state.unshare_pid {
@@ -433,7 +426,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
             }
             SetupOp::MountDev { perms, dest } => {
                 let dest = get_dest!(dest, *perms);
-                if ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)).is_err() {
+                if ensure_dir_(&dest, Mode::from_bits_truncate(0o755)).is_err() {
                     panic!("Can't mkdir {}", dest.display());
                 }
                 privileged_op(
@@ -449,7 +442,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                     let node_dest = push_path!(dest.clone(), elem);
                     let node_src = push_path!("/oldroot/dev/".into(), elem);
 
-                    if let Err(e) = create_file_rust(
+                    if let Err(e) = create_file(
                         &node_dest,
                         Mode::from_bits_truncate(0o444),
                         Option::<&[u8]>::None,
@@ -502,7 +495,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                 if let Some(tty_dev) = &state.host_tty_dev {
                     let src_tty_dev = push_path!(PathBuf::from("/oldroot"), tty_dev);
                     let dest_console = push_path!(dest.clone(), "console");
-                    if let Err(e) = create_file_rust(
+                    if let Err(e) = create_file(
                         &dest_console,
                         Mode::from_bits_truncate(0o444),
                         Option::<&[u8]>::None,
@@ -522,7 +515,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
             }
             SetupOp::MountTmpfs { perms, size, dest } => {
                 let dest = get_dest!(dest, *perms);
-                if let Err(e) = ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)) {
+                if let Err(e) = ensure_dir_(&dest, Mode::from_bits_truncate(0o755)) {
                     panic!("TODO: can't mkdir {}: {e}", dest.display())
                 }
                 privileged_op(
@@ -538,7 +531,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
 
             SetupOp::MountMqueue { dest, perms } => {
                 let dest = get_dest!(dest, *perms);
-                if let Err(e) = ensure_dir_rust(&dest, Mode::from_bits_truncate(0o755)) {
+                if let Err(e) = ensure_dir_(&dest, Mode::from_bits_truncate(0o755)) {
                     panic!("TODO: can't mkdir {}: {e}", dest.display())
                 }
                 privileged_op(
@@ -550,7 +543,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
             SetupOp::MakeDir { perms, dest } => {
                 let dest = get_dest!(dest, *perms);
                 if let Err(e) =
-                    ensure_dir_rust(&dest, perms.unwrap_or(Mode::from_bits_truncate(0o755)))
+                    ensure_dir_(&dest, perms.unwrap_or(Mode::from_bits_truncate(0o755)))
                 {
                     panic!("TODO: can't mkdir {}: {e}", dest.display())
                 }
@@ -582,7 +575,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                 if let Err(e) = dest_fd {
                     panic!("Can't create file {}: {e}", dest.display());
                 }
-                if let Err(e) = copy_file_data_rust(fd.as_fd(), dest_fd.unwrap().as_fd()) {
+                if let Err(e) = copy_file_data(fd.as_fd(), dest_fd.unwrap().as_fd()) {
                     panic!("Can't write data to file {}: {e}", dest.display());
                 }
             }
@@ -602,12 +595,12 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                         dest.display()
                     );
                 }
-                if let Err(e) = copy_file_data_rust(fd.as_fd(), dest_fd.as_fd()) {
+                if let Err(e) = copy_file_data(fd.as_fd(), dest_fd.as_fd()) {
                     panic!("Can't write data to file {}: {e}", dest.display());
                 }
                 drop(fd);
 
-                if let Err(e) = ensure_file_rust(&dest, Mode::from_bits_truncate(0o444)) {
+                if let Err(e) = ensure_file(&dest, Mode::from_bits_truncate(0o444)) {
                     panic!("Can't create file at {}: {e}", dest.display());
                 }
                 privileged_op(

@@ -9,7 +9,7 @@ use nix::mount::MsFlags;
 use nix::sys::stat::Mode;
 use nix::NixPath;
 
-use crate::nix_retry;
+use crate::utils::nix_retry;
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Hash, serde::Serialize, serde::Deserialize)]

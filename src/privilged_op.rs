@@ -6,10 +6,7 @@ use std::{
 
 use nix::mount::MsFlags;
 
-use crate::{
-    bind_mount::{bind_mount, BindMountError, BindOptions},
-    nix_retry,
-};
+use crate::{bind_mount::{bind_mount, BindMountError, BindOptions}, utils::nix_retry};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PrivilegedOpError {

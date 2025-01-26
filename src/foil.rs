@@ -24,34 +24,19 @@ use nix::sys::stat::Mode;
 use nix::sys::wait::WaitPidFlag;
 use nix::unistd::{ForkResult, Gid, Pid, Uid};
 use nix::NixPath;
-use privilged_op::{PrivilegedOp, PrivilegedOpError};
 
+use crate::network::loopback_setup;
+use crate::privilged_op::{privileged_op, PrivilegedOp, PrivilegedOpError};
 use crate::setup_newroot::setup_newroot;
-
-use crate::*;
-use crate::{
-    types::*,
-    utils::{
-        fdwalk, load_file_data, pivot_root,
-        raw_clone, write_to_fd, xcalloc,
-    },
+use crate::utils::{
+    fdwalk, nix_retry, pivot_root, raw_clone, write_file_at_rust, write_to_fd_rust,
 };
-
-use crate::privilged_op::privileged_op;
 
 #[derive(Copy, Clone)]
 pub struct NsInfo {
     pub name: &'static CStr,
     pub do_unshare: fn(&mut State) -> Option<&mut bool>,
-    pub id: fn(&mut State) -> &mut Option<ino_t>,
-}
-
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-    pub struct  SetupOpFlag: u32 {
-        const ALLOW_NOTEXIST = 1;
-        const NO_CREATE_DEST = 2;
-    }
+    pub id: fn(&mut State) -> &mut Option<libc::ino_t>,
 }
 
 #[derive(Debug)]
@@ -246,74 +231,6 @@ impl SetupOp {
     }
 }
 
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct _LockFile {
-    pub path: *const libc::c_char,
-    pub fd: libc::c_int,
-    pub next: *mut LockFile,
-}
-
-pub type LockFile = _LockFile;
-
-#[derive(Copy, Clone)]
-#[repr(C)]
-
-pub struct _SeccompProgram {
-    pub program: sock_fprog,
-    pub next: *mut SeccompProgram,
-}
-
-pub type SeccompProgram = _SeccompProgram;
-
-/*
-pub static mut argv0: *const libc::c_char = 0 as *const libc::c_char;
-pub static mut host_tty_dev: *const libc::c_char = 0 as *const libc::c_char;
-pub static mut is_privileged: bool = false;
-pub static mut next_overlay_src_count: libc::c_int = 0;
-pub static mut next_perms: libc::c_int = -1;
-pub static mut next_size_arg: size_t = 0;
-pub static mut opt_args_data: *mut libc::c_char = std::ptr::null_mut() as *mut libc::c_char;
-pub static mut opt_argv0: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-pub static mut opt_as_pid_1: bool = false;
-pub static mut opt_assert_userns_disabled: bool = false;
-pub static mut opt_block_fd: libc::c_int = -1;
-pub static mut opt_chdir_path: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-pub static mut opt_die_with_parent: bool = false;
-pub static mut opt_disable_userns: bool = false;
-pub static mut opt_exec_label: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-pub static mut opt_file_label: *const libc::c_char = std::ptr::null_mut() as *const libc::c_char;
-pub static mut opt_info_fd: libc::c_int = -1;
-pub static mut opt_json_status_fd: libc::c_int = -1;
-pub static mut opt_needs_devpts: bool = false;
-pub static mut opt_new_session: bool = false;
-pub static mut opt_pidns_fd: libc::c_int = -1;
-pub static mut opt_sandbox_gid: gid_t = gid_t::MAX;
-pub static mut opt_sandbox_hostname: *const libc::c_char =
-    std::ptr::null_mut() as *const libc::c_char;
-pub static mut opt_sandbox_uid: uid_t = uid_t::MAX;
-pub static mut opt_seccomp_fd: libc::c_int = -1;
-pub static mut opt_sync_fd: libc::c_int = -1;
-pub static mut opt_tmp_overlay_count: libc::c_int = 0;
-
-pub static mut opt_unshare_cgroup: bool = false;
-pub static mut opt_unshare_cgroup_try: bool = false;
-pub static mut opt_unshare_ipc: bool = false;
-pub static mut opt_unshare_net: bool = false;
-pub static mut opt_unshare_pid: bool = false;
-pub static mut opt_unshare_user: bool = false;
-pub static mut opt_unshare_user_try: bool = false;
-pub static mut opt_unshare_uts: bool = false;
-pub static mut opt_userns2_fd: libc::c_int = -1;
-pub static mut opt_userns_block_fd: libc::c_int = -1;
-pub static mut opt_userns_fd: libc::c_int = -1;
-pub static mut overflow_gid: gid_t = 0;
-pub static mut overflow_uid: uid_t = 0;
-pub static mut proc_fd: libc::c_int = -1;
-pub static mut real_gid: gid_t = 0;
-pub static mut real_uid: uid_t = 0;
-*/
-
 #[derive(Debug)]
 pub struct State {
     pub operations: Vec<SetupOp>,
@@ -356,48 +273,12 @@ pub struct State {
 
     pub env: HashMap<OsString, OsString>,
 
-    pub id_cgroup: Option<ino_t>,
-    pub id_ipc: Option<ino_t>,
-    pub id_net: Option<ino_t>,
-    pub id_pid: Option<ino_t>,
-    pub id_uts: Option<ino_t>,
+    pub id_cgroup: Option<libc::ino_t>,
+    pub id_ipc: Option<libc::ino_t>,
+    pub id_net: Option<libc::ino_t>,
+    pub id_pid: Option<libc::ino_t>,
+    pub id_uts: Option<libc::ino_t>,
 }
-
-const NS_INFO: [NsInfo; 6] = [
-    NsInfo {
-        name: c"cgroup",
-        do_unshare: |state: &mut State| Some(&mut state.unshare_cgroup),
-        id: |state: &mut State| (&mut state.id_cgroup),
-    },
-    NsInfo {
-        name: c"ipc",
-        do_unshare: |state: &mut State| Some(&mut state.unshare_ipc),
-        id: |state: &mut State| (&mut state.id_ipc),
-    },
-    NsInfo {
-        name: c"mnt",
-        do_unshare: |_: &mut State| None,
-        id: |_: &mut State| unreachable!("No id for mnt"),
-    },
-    NsInfo {
-        name: c"net",
-        do_unshare: |state: &mut State| Some(&mut state.unshare_net),
-        id: |state: &mut State| (&mut state.id_net),
-    },
-    NsInfo {
-        name: c"pid",
-        do_unshare: |state: &mut State| Some(&mut state.unshare_pid),
-        id: |state: &mut State| (&mut state.id_pid),
-    },
-    /* user namespace info omitted because it
-     * is not (yet) valid when we obtain the
-     * namespace info (get un-shared later) */
-    NsInfo {
-        name: c"uts",
-        do_unshare: |state: &mut State| Some(&mut state.unshare_uts),
-        id: |state: &mut State| (&mut state.id_uts),
-    },
-];
 
 #[derive(Debug)]
 pub enum StateCreationError {
@@ -468,47 +349,6 @@ impl State {
     }
 }
 
-static mut lock_files: *mut LockFile = std::ptr::null_mut() as *mut LockFile;
-
-static mut last_lock_file: *mut LockFile = std::ptr::null_mut() as *mut LockFile;
-
-unsafe fn _seccomp_program_append_new() -> *mut SeccompProgram {
-    let self_0 = xcalloc(1, ::core::mem::size_of::<SeccompProgram>()) as *mut SeccompProgram;
-    if !last_seccomp_program.is_null() {
-        (*last_seccomp_program).next = self_0;
-    } else {
-        seccomp_programs = self_0;
-    }
-    last_seccomp_program = self_0;
-    return self_0;
-}
-
-static mut seccomp_programs: *mut SeccompProgram = std::ptr::null_mut() as *mut SeccompProgram;
-
-static mut last_seccomp_program: *mut SeccompProgram = std::ptr::null_mut() as *mut SeccompProgram;
-
-unsafe fn seccomp_program_new(fd: *mut libc::c_int) -> *mut SeccompProgram {
-    let self_0 = _seccomp_program_append_new();
-    let mut data = std::ptr::null_mut() as *mut libc::c_char;
-    let mut len: size_t = 0;
-    data = load_file_data(*fd, &mut len);
-    if data.is_null() {
-        die_with_error!(c"Can't read seccomp data".as_ptr());
-    }
-    close(*fd);
-    *fd = -1;
-    if len.wrapping_rem(8) != 0 {
-        die!(c"Invalid seccomp data, must be multiple of 8".as_ptr());
-    }
-    (*self_0).program.len = len.wrapping_div(8) as _;
-    (*self_0).program.filter = (if 0 != 0 {
-        data as *mut libc::c_void
-    } else {
-        steal_pointer(&mut data as *mut *mut libc::c_char as *mut libc::c_void)
-    }) as *mut sock_filter;
-    return self_0;
-}
-
 #[derive(Clone, Debug, thiserror::Error)]
 #[error("prctl error: {0}")]
 struct HandleDieWithParentError(#[from] Errno);
@@ -548,60 +388,11 @@ fn unblock_sigchild() -> Result<(), UnblockSigchild> {
     Ok(())
 }
 
-unsafe fn close_extra_fds(data: *mut libc::c_void, fd: libc::c_int) -> libc::c_int {
-    let extra_fds = data as *mut libc::c_int;
-    let mut i: libc::c_int = 0;
-    i = 0;
-    while *extra_fds.offset(i as isize) != -1 {
-        if fd == *extra_fds.offset(i as isize) {
-            return 0;
-        }
-        i += 1;
-    }
-    if fd <= 2 {
-        return 0;
-    }
-    close(fd);
-    return 0;
-}
-
 fn close_extra_fds_closure(data: &[RawFd]) -> impl Fn(RawFd) + use<'_> {
     |fd: RawFd| {
         if fd > 2 || !data.contains(&fd) {
             let _ = nix::unistd::close(fd);
         }
-    }
-}
-/*
-  if (WIFEXITED(status))
-    return WEXITSTATUS(status);
-
-  / * The process died of a signal, we can't really report that, but we
-   * can at least be bash-compatible. The bash manpage says:
-   *   The return value of a simple command is its
-   *   exit status, or 128+n if the command is
-   *   terminated by signal n.
-   * /
-  if (WIFSIGNALED(status))
-    return 128 + WTERMSIG(status);
-
-  / * Weird? * /
-  return 255;
-*/
-fn propagate_exit_status(status: libc::c_int) -> libc::c_int {
-    if libc::WIFEXITED(status) {
-        return libc::WEXITSTATUS(status);
-    }
-    if libc::WIFSIGNALED(status) {
-        return 128 + libc::WTERMSIG(status);
-    }
-    return 255;
-}
-
-unsafe fn dump_info(fd: libc::c_int, output: *const libc::c_char, exit_on_error: bool) {
-    let len = strlen(output);
-    if write_to_fd(fd, output, len as ssize_t) != 0 && exit_on_error {
-        die_with_error!(c"Write to info_fd".as_ptr());
     }
 }
 
@@ -625,7 +416,8 @@ fn monitor_child(
     fdwalk(
         state.proc_fd.as_ref().map(|f| f.as_fd()).unwrap(),
         close_extra_fds_closure(&dont_close[..j]),
-    );
+    )
+    .expect("");
     let mut mask = SigSet::empty();
     mask.add(Signal::SIGCHLD);
     let signal_fd = match nix::sys::signalfd::SignalFd::with_flags(
@@ -696,7 +488,7 @@ fn monitor_child(
 
 fn do_init(state: &State, event_fd: Option<EventFd>, initial_pid: Pid) -> libc::c_int {
     let mut initial_exit_status = 1;
-    handle_die_with_parent(state);
+    handle_die_with_parent(state).expect("");
     //seccomp_programs_apply();
     loop {
         let child = nix_retry!(nix::sys::wait::wait());
@@ -724,18 +516,6 @@ fn do_init(state: &State, event_fd: Option<EventFd>, initial_pid: Pid) -> libc::
     }
     return initial_exit_status;
 }
-
-static mut opt_cap_add_or_drop_used: bool = false;
-static mut requested_caps: [u32; 2] = [0, 0];
-
-pub const REQUIRED_CAPS_0: libc::c_long = (1) << (21 & 31)
-    | (1) << (18 & 31)
-    | (1) << (12 & 31)
-    | (1) << (7 & 31)
-    | (1) << (6 & 31)
-    | (1) << (19 & 31);
-
-pub const REQUIRED_CAPS_1: libc::c_int = 0;
 
 fn set_required_caps() -> Result<(), CapsError> {
     let caps = [
@@ -769,30 +549,6 @@ fn drop_all_caps(state: &State, keep_requested_caps: bool) -> Result<(), caps::e
     Ok(())
 }
 
-unsafe fn has_caps() -> bool {
-    let mut hdr = __user_cap_header_struct {
-        version: _LINUX_CAPABILITY_VERSION_3 as u32,
-        pid: 0,
-    };
-
-    let mut data: [__user_cap_data_struct; 2] = [
-        __user_cap_data_struct {
-            effective: 0,
-            permitted: 0,
-            inheritable: 0,
-        },
-        __user_cap_data_struct {
-            effective: 0,
-            permitted: 0,
-            inheritable: 0,
-        },
-    ];
-    if capget(&mut hdr, data.as_mut_ptr()) < 0 {
-        die_with_error!(c"capget failed".as_ptr());
-    }
-    return data[0].permitted != 0 || data[1].permitted != 0;
-}
-
 fn prctl_caps_rust(
     caps: CapsHashSet,
     do_cap_bounding: bool,
@@ -824,39 +580,11 @@ fn prctl_caps_rust(
     Ok(())
 }
 
-unsafe fn prctl_caps(caps: *mut u32, do_cap_bounding: bool, do_set_ambient: bool) {
-    let mut cap: libc::c_ulong = 0;
-    cap = 0;
-    while cap <= CAP_LAST_CAP as libc::c_ulong {
-        let mut keep = false;
-        if cap < 32 {
-            if (1) << (cap & 31) & *caps.offset(0) as libc::c_long != 0 {
-                keep = true;
-            }
-        } else if (1) << (cap.wrapping_sub(32) & 31) & *caps.offset(1) as libc::c_long != 0 {
-            keep = true;
-        }
-        if keep as libc::c_int != 0 && do_set_ambient as libc::c_int != 0 {
-            let res = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, cap, 0, 0);
-            if res == -1 && !(errno!() == libc::EINVAL || errno!() == libc::EPERM) {
-                die_with_error!(c"Adding ambient capability %ld".as_ptr(), cap,);
-            }
-        }
-        if !keep && do_cap_bounding as libc::c_int != 0 {
-            let res_0 = prctl(PR_CAPBSET_DROP, cap, 0, 0, 0);
-            if res_0 == -1 && !(errno!() == libc::EINVAL || errno!() == libc::EPERM) {
-                die_with_error!(c"Dropping capability %ld from bounds".as_ptr(), cap,);
-            }
-        }
-        cap = cap.wrapping_add(1);
-    }
-}
-
 fn drop_cap_bounding_set(state: &State, drop_all: bool) {
     if !drop_all {
-        prctl_caps_rust(state.requested_caps.clone(), true, false);
+        prctl_caps_rust(state.requested_caps.clone(), true, false).expect("");
     } else {
-        prctl_caps_rust(Default::default(), true, false);
+        prctl_caps_rust(Default::default(), true, false).expect("");
     };
 }
 
@@ -864,7 +592,7 @@ fn set_ambient_capabilities(state: &State) {
     if state.is_privileged {
         return;
     }
-    prctl_caps_rust(state.requested_caps.clone(), false, true);
+    prctl_caps_rust(state.requested_caps.clone(), false, true).expect("");
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -894,11 +622,11 @@ fn acquire_privs(state: &mut State) -> Result<(), AcquirePrivError> {
             return Err(AcquirePrivError::FsUidSetError(Errno::last()));
         }
         // == setfsuid(-1)
-        let new_fsuid = nix::unistd::setfsuid(Uid::from_raw(uid_t::MAX));
+        let new_fsuid = nix::unistd::setfsuid(Uid::from_raw(libc::uid_t::MAX));
         if new_fsuid != state.real_uid {
             return Err(AcquirePrivError::FsUidSetErrorBis);
         }
-        prctl_caps_rust(CapsHashSet::new(), true, false);
+        prctl_caps_rust(CapsHashSet::new(), true, false).expect("");
         set_required_caps().map_err(AcquirePrivError::CapError)?;
     } else if !state.real_uid.is_root()
         && !caps::read(None, caps::CapSet::Permitted)
@@ -926,7 +654,7 @@ fn switch_to_user_with_privs(state: &State) {
     if let Err(e) = nix::unistd::setuid(state.sandbox_uid.unwrap_or(state.real_uid)) {
         panic!("unable to drop root uid: {e}");
     }
-    set_required_caps();
+    set_required_caps().expect("");
 }
 
 fn drop_privs(state: &State, keep_requested_caps: bool, already_changed_uid: bool) {
@@ -936,7 +664,7 @@ fn drop_privs(state: &State, keep_requested_caps: bool, already_changed_uid: boo
             panic!("unable to drop root uid: {e}");
         }
     }
-    drop_all_caps(state, keep_requested_caps);
+    drop_all_caps(state, keep_requested_caps).expect("");
     if let Err(e) = nix::sys::prctl::set_dumpable(true) {
         panic!("can't set dumpable: {e}");
     }
@@ -1071,16 +799,11 @@ fn resolve_symlinks_in_ops(op_list: &mut [SetupOp]) {
     }
 }
 
-fn print_version_and_exit() -> ! {
-    unsafe { libc::printf(c"%s\n".as_ptr(), PACKAGE_STRING.as_ptr()) };
-    std::process::exit(0);
-}
-
-pub fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int {
+pub fn main_0() -> Result<i32, ()> {
     let mut state = State::new().expect("TODO:");
     state.env = std::env::vars_os().collect();
 
-    acquire_privs(&mut state);
+    acquire_privs(&mut state).expect("TODO: ");
     nix::sys::prctl::set_no_new_privs().expect("TODO:");
     // parse_args(
     // &mut argc,
@@ -1152,7 +875,7 @@ pub fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int {
     } else {
         None
     };
-    block_sigchild();
+    block_sigchild().expect("TODO:");
     let mut clone_flags: CloneFlags =
         CloneFlags::from_bits_retain(Signal::SIGCHLD as _) | CloneFlags::CLONE_NEWNS;
     if state.unshare_user {
@@ -1236,7 +959,7 @@ pub fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int {
 
         let _ = nix_retry!(nix::unistd::write(child_wait_fd.as_fd(), val_bytes));
         drop(child_wait_fd);
-        return monitor_child(&state, event_fd, pid, None);
+        return Ok(monitor_child(&state, event_fd, pid, None));
     }
     let mut val = 1;
     let val_bytes =
@@ -1336,7 +1059,7 @@ pub fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int {
         };
         if let ForkResult::Child = child {
             drop_privs(&state, false, true);
-            nix::unistd::close(privsep_sockets.0.as_raw_fd());
+            let _ = nix::unistd::close(privsep_sockets.0.as_raw_fd());
             setup_newroot(&mut state, Some(privsep_sockets.1.as_raw_fd()));
             std::process::exit(0);
         } else if let ForkResult::Parent { child } = child {
@@ -1498,7 +1221,7 @@ pub fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int {
                 state.proc_fd.as_ref().map(|f| f.as_fd()).unwrap(),
                 close_extra_fds_closure(&dont_close[..j]),
             );
-            return do_init(&state, event_fd, child);
+            return Ok(do_init(&state, event_fd, child));
         }
     }
     // we close proc_fd
