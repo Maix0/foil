@@ -36,7 +36,7 @@ fn unescape(s: impl AsRef<BStr>) -> Option<BString> {
         while let Some(&c) = chars.next() {
             if c == b'\\' {
                 let cs = [*chars.next()?, *chars.next()?, *chars.next()?];
-                if cs.iter().any(|&c| c < b'0' || c > b'9') {
+                if cs.iter().any(|&c| !c.is_ascii_digit()) {
                     return None;
                 }
                 out.push(((cs[0] - b'0') << 6) | ((cs[1] - b'0') << 3) | (cs[2] - b'0'));

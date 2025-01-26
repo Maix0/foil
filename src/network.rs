@@ -74,7 +74,7 @@ fn add_rta(header: &mut nlmsghdr, rta_type: libc::c_int, size: usize) -> *mut ()
 
     let rta = unsafe {
         &mut *((&raw mut *header).cast::<u8>())
-            .add(nlmsg_align((*header).nlmsg_len as _))
+            .add(nlmsg_align(header.nlmsg_len as _))
             .cast::<rtattr>()
     };
 
@@ -82,7 +82,7 @@ fn add_rta(header: &mut nlmsghdr, rta_type: libc::c_int, size: usize) -> *mut ()
     rta.rta_len = rta_size as _;
     header.nlmsg_len = (nlmsg_align(header.nlmsg_len as _) + rta_size) as _;
 
-    return rta_data(rta);
+    rta_data(rta)
 }
 
 fn counter() -> u32 {

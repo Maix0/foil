@@ -504,7 +504,7 @@ fn do_init(state: &State, event_fd: Option<EventFd>, initial_pid: Pid) -> libc::
                     let val_bytes = unsafe {
                         std::slice::from_raw_parts(&raw const val as *const u8, size_of_val(&val))
                     };
-                    let _ = nix_retry!(nix::unistd::write(fd, &val_bytes));
+                    let _ = nix_retry!(nix::unistd::write(fd, val_bytes));
                 }
             }
             Err(e) if e != Errno::ECHILD => {
@@ -514,7 +514,7 @@ fn do_init(state: &State, event_fd: Option<EventFd>, initial_pid: Pid) -> libc::
             Ok(_) => {}
         };
     }
-    return initial_exit_status;
+    initial_exit_status
 }
 
 fn set_required_caps() -> Result<(), CapsError> {
@@ -820,7 +820,7 @@ pub fn main_0() -> Result<i32, ()> {
         if nix::sys::stat::stat(c"/sys/module/user_namespace/parameters/enable").is_ok() {
             let enable = std::fs::read("/sys/module/user_namespace/parameters/enable");
             match enable {
-                Ok(n) if n.get(0) == Some(&b'N') => disabled = true,
+                Ok(n) if n.first() == Some(&b'N') => disabled = true,
                 _ => {}
             }
         }
@@ -1063,9 +1063,9 @@ pub fn main_0() -> Result<i32, ()> {
             setup_newroot(&mut state, Some(privsep_sockets.1.as_raw_fd()));
             std::process::exit(0);
         } else if let ForkResult::Parent { child } = child {
-            fn handle_priv_op<'s, 'fd, 'buf>(
-                state: &'s State,
-                fd: BorrowedFd<'fd>,
+            fn handle_priv_op<'buf>(
+                state: &State,
+                fd: BorrowedFd<'_>,
                 buffer: &'buf mut [u8],
             ) -> Result<(bool, &'buf mut [u8]), ()> {
                 let bytes = nix_retry!(nix::unistd::read(fd.as_raw_fd(), &mut buffer[..]))

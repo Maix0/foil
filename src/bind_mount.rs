@@ -57,10 +57,10 @@ pub enum BindMountError {
     RemountSubmount(OsString),
 }
 
-pub fn bind_mount<'a, 'b, P1: ?Sized + NixPath, P2: ?Sized + NixPath>(
+pub fn bind_mount<P1: ?Sized + NixPath, P2: ?Sized + NixPath>(
     proc_fd: BorrowedFd<'_>,
-    src: Option<&'a P1>,
-    dest: &'b P2,
+    src: Option<&P1>,
+    dest: &P2,
     options: BindOptions,
 ) -> Result<(), BindMountError> {
     let readonly = options.contains(BindOptions::BIND_READONLY);
@@ -135,20 +135,17 @@ pub fn bind_mount<'a, 'b, P1: ?Sized + NixPath, P2: ?Sized + NixPath>(
         | readonly
             .then_some(MsFlags::MS_RDONLY)
             .unwrap_or_else(MsFlags::empty);
-    if new_flags != current_flags {
-        if nix::mount::mount(
+    if new_flags != current_flags && nix::mount::mount(
             Some("none"),
             resolved_dest.as_c_str(),
             Option::<&CStr>::None,
             MsFlags::MS_SILENT | MsFlags::MS_BIND | MsFlags::MS_REMOUNT | new_flags,
             Option::<&CStr>::None,
         )
-        .is_err()
-        {
-            return Err(BindMountError::ReadlinkDestProcFd(OsString::from_vec(
-                resolved_dest.into_bytes(),
-            )));
-        }
+        .is_err() {
+        return Err(BindMountError::ReadlinkDestProcFd(OsString::from_vec(
+            resolved_dest.into_bytes(),
+        )));
     }
     if recursive {
         for elem in mount_tab.iter().skip(1) {

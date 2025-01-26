@@ -31,9 +31,9 @@ macro_rules! push_path {
     };
 }
 
-static COVER_PROC_DIR: &'static [&'static str] = &["sys", "sysrq-trigger", "irq", "bus"];
-static DEV_NODES: &'static [&'static str] = &["null", "zero", "full", "random", "urandom", "tty"];
-static STDIO_NODES: &'static [&'static str] = &["stdin", "stdout", "stderr"];
+static COVER_PROC_DIR: &[&str] = &["sys", "sysrq-trigger", "irq", "bus"];
+static DEV_NODES: &[&str] = &["null", "zero", "full", "random", "urandom", "tty"];
+static STDIO_NODES: &[&str] = &["stdin", "stdout", "stderr"];
 
 fn get_newroot_path_rust(path: impl AsRef<Path>) -> PathBuf {
     fn _inner(path: &Path) -> PathBuf {
@@ -338,14 +338,14 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                     write!(&mut options, "upperdir=/oldroot");
                     write_options(&mut options, src.as_os_str().as_bytes().into());
                     write!(&mut options, ",workdir=/oldroot");
-                    let Some(op_src) = op_iterator.next().map(|o| o.src()).flatten() else {
+                    let Some(op_src) = op_iterator.next().and_then(|o| o.src()) else {
                         panic!("TODO: buuble up error");
                     };
                     write_options(&mut options, op_src.as_os_str().as_bytes().into());
                     write!(&mut options, ",");
                 } else if let &SetupOp::TmpOverlayMount { .. } = &op {
                     let idx = tmp_overlay_idx;
-                    tmp_overlay_idx = tmp_overlay_idx + 1;
+                    tmp_overlay_idx += 1;
                     write!(
                         &mut options,
                         "upperdir=/tmp-overlay-upper-{idx},workdir=/tmp-overlay-work-{idx},"
@@ -549,7 +549,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                 }
             }
             SetupOp::Chmod { perms, dest } => {
-                let dest = get_newroot_path_rust(&dest);
+                let dest = get_newroot_path_rust(dest);
                 if let Err(e) = nix::sys::stat::fchmodat(
                     None,
                     &dest,
@@ -608,7 +608,7 @@ pub fn setup_newroot(state: &mut crate::foil::State, privileged_op_socket: Optio
                     privileged_op_socket,
                     privilged_op::PrivilegedOp::BindMount {
                         src: tempfile.clone(),
-                        dest: dest.into(),
+                        dest,
                         flags: (if matches!(op, SetupOp::MakeRoBindFile { .. }) {
                             BindOptions::BIND_READONLY
                         } else {

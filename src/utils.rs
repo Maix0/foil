@@ -82,8 +82,8 @@ pub fn fdwalk<'a, F: Fn(RawFd) + 'a>(proc_fd: BorrowedFd<'_>, cb: F) -> Result<(
     Ok(())
 }
 
-pub fn write_to_fd_rust<'fd>(
-    fd: BorrowedFd<'fd>,
+pub fn write_to_fd_rust(
+    fd: BorrowedFd<'_>,
     mut content: &[u8],
 ) -> Result<(), nix::errno::Errno> {
     while !content.is_empty() {
