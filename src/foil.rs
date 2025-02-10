@@ -24,6 +24,7 @@ use nix::sys::stat::Mode;
 use nix::sys::wait::WaitPidFlag;
 use nix::unistd::{ForkResult, Gid, Pid, Uid};
 use nix::NixPath;
+use serde::{Deserialize, Serialize};
 
 use crate::network::loopback_setup;
 use crate::privilged_op::{privileged_op, PrivilegedOp, PrivilegedOpError};
@@ -31,13 +32,6 @@ use crate::setup_newroot::setup_newroot;
 use crate::utils::{
     fdwalk, nix_retry, pivot_root, raw_clone, write_file_at_rust, write_to_fd_rust,
 };
-
-#[derive(Copy, Clone)]
-pub struct NsInfo {
-    pub name: &'static CStr,
-    pub do_unshare: fn(&mut State) -> Option<&mut bool>,
-    pub id: fn(&mut State) -> &mut Option<libc::ino_t>,
-}
 
 #[derive(Debug)]
 pub enum SetupOp {
@@ -272,12 +266,6 @@ pub struct State {
     pub requested_caps: caps::CapsHashSet,
 
     pub env: HashMap<OsString, OsString>,
-
-    pub id_cgroup: Option<libc::ino_t>,
-    pub id_ipc: Option<libc::ino_t>,
-    pub id_net: Option<libc::ino_t>,
-    pub id_pid: Option<libc::ino_t>,
-    pub id_uts: Option<libc::ino_t>,
 }
 
 #[derive(Debug)]
@@ -340,11 +328,6 @@ impl State {
             change_cap: false,
             requested_caps: Default::default(),
             env: Default::default(),
-            id_cgroup: None,
-            id_ipc: None,
-            id_net: None,
-            id_pid: None,
-            id_uts: None,
         })
     }
 }
@@ -799,7 +782,10 @@ fn resolve_symlinks_in_ops(op_list: &mut [SetupOp]) {
     }
 }
 
-pub fn main_0() -> Result<i32, ()> {
+#[derive(thiserror::Error, Deserialize, Serialize, Debug)]
+pub enum FoilError {}
+
+pub fn main_0() -> Result<i32, FoilError> {
     let mut state = State::new().expect("TODO:");
     state.env = std::env::vars_os().collect();
 
@@ -952,7 +938,7 @@ pub fn main_0() -> Result<i32, ()> {
             );
         }
         drop_privs(&state, false, false);
-        handle_die_with_parent(&state);
+        handle_die_with_parent(&state).expect("TODO: ");
         let mut val = 1;
         let val_bytes =
             unsafe { std::slice::from_raw_parts_mut(&raw mut val as *mut u8, size_of_val(&val)) };
@@ -1193,12 +1179,12 @@ pub fn main_0() -> Result<i32, ()> {
     } else if nix::unistd::chdir(&old_cwd).is_ok() {
         new_cwd = old_cwd;
     } else {
-        let home = std::env::var_os("HOME");
-        if let Some(Ok(())) = home.as_ref().map(|p| nix::unistd::chdir(p.as_os_str())) {
+        let home = state.env.get("HOME");
+        if let Some(Ok(())) = home.map(|p| nix::unistd::chdir(p.as_os_str())) {
             new_cwd = home.unwrap().into();
         }
     }
-    std::env::set_var("PWD", new_cwd);
+    state.env.insert("PWD".into(), new_cwd.into());
     if state.new_session {
         if let Err(e) = nix::unistd::setsid() {
             panic!("setsid: {e}");
@@ -1210,7 +1196,7 @@ pub fn main_0() -> Result<i32, ()> {
             Ok(pid) => pid,
         };
         if let ForkResult::Parent { child } = fork_result {
-            drop_all_caps(&state, false);
+            drop_all_caps(&state, false).expect("TODO:");
             let mut dont_close: [RawFd; 3] = [0; 3];
             let mut j = 0;
             if let Some(fd) = &event_fd {
@@ -1220,15 +1206,16 @@ pub fn main_0() -> Result<i32, ()> {
             fdwalk(
                 state.proc_fd.as_ref().map(|f| f.as_fd()).unwrap(),
                 close_extra_fds_closure(&dont_close[..j]),
-            );
+            )
+            .expect("TODO: ");
             return Ok(do_init(&state, event_fd, child));
         }
     }
     // we close proc_fd
     let _ = state.proc_fd.take();
 
-    unblock_sigchild();
-    handle_die_with_parent(&state);
+    unblock_sigchild().expect("TODO: ");
+    handle_die_with_parent(&state).expect("TODO: ");
     if !state.is_privileged {
         set_ambient_capabilities(&state);
     }

@@ -26,7 +26,7 @@
     in {
       devShell = let
         rust_bin =
-          pkgs.rust-bin.stable.latest.default;
+          pkgs.rust-bin.nightly.latest.default;
       in
         pkgs.mkShell {
           packages =
